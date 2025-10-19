@@ -9,12 +9,16 @@ pub fn preflight(pool: &str) -> Result<()> {
     for bin in ["zfs", "zpool", "dracut", "lsinitrd", "udevadm"] {
         let st = Command::new("bash")
             .args(["-lc", &format!("command -v {bin}")])
-            .status()?;
+            .status()
+            .context("shell not available to run command -v")?;
         if !st.success() {
             return Err(anyhow!("Missing required tool: {bin}"));
         }
     }
-    let st = Command::new("zpool").args(["list", pool]).status()?;
+    let st = Command::new("zpool")
+        .args(["list", pool])
+        .status()
+        .context("zpool list failed")?;
     if !st.success() {
         return Err(anyhow!("Pool {pool} not found"));
     }
@@ -24,7 +28,8 @@ pub fn preflight(pool: &str) -> Result<()> {
 pub fn set_prop(ds: &str, key: &str, val: &str) -> Result<()> {
     let st = Command::new("zfs")
         .args(["set", &format!("{key}={val}"), ds])
-        .status()?;
+        .status()
+        .context("zfs set failed")?;
     if !st.success() {
         return Err(anyhow!("zfs set {key}={val} {ds} failed"));
     }
@@ -32,15 +37,18 @@ pub fn set_prop(ds: &str, key: &str, val: &str) -> Result<()> {
 }
 
 pub fn ensure_raw_key(key_dir: &str, key_path: &str, pool: &str) -> Result<()> {
-    fs::create_dir_all(key_dir)?;
+    fs::create_dir_all(key_dir).context("creating key directory")?;
     if !std::path::Path::new(key_path).exists() {
-        let mut f = File::create(key_path)?;
+        // Create 32-byte raw key file
+        let mut f = File::create(key_path).context("creating key file")?;
         let mut buf = [0u8; 32];
         getrandom(&mut buf).map_err(|_| anyhow!("getrandom failed"))?;
-        f.write_all(&buf)?;
-        fs::set_permissions(key_path, fs::Permissions::from_mode(0o000))?;
+        f.write_all(&buf).context("writing key bytes")?;
+        // Lock down permissions (initramfs hook reads the USB copy, not this file)
+        fs::set_permissions(key_path, fs::Permissions::from_mode(0o000))
+            .context("setting key permissions")?;
     }
-    // Attach/rotate to raw key
+    // Attach/rotate to raw key on the pool (does NOT remove passphrase fallback)
     let st = Command::new("zfs")
         .args([
             "change-key",
@@ -50,7 +58,8 @@ pub fn ensure_raw_key(key_dir: &str, key_path: &str, pool: &str) -> Result<()> {
             &format!("keylocation=file://{key_path}"),
             pool,
         ])
-        .status()?;
+        .status()
+        .context("zfs change-key (attach raw) failed to execute")?;
     if !st.success() {
         return Err(anyhow!("zfs change-key attach raw failed for {pool}"));
     }
@@ -58,7 +67,7 @@ pub fn ensure_raw_key(key_dir: &str, key_path: &str, pool: &str) -> Result<()> {
 }
 
 pub fn force_converge_children(pool: &str) -> Result<()> {
-    // Multi-pass: clear child keylocation, then inherit via change-key -i
+    // Multi-pass converge: clear child keylocation, then run `change-key -i` with "inherit"
     for _ in 0..5 {
         let out = Command::new("zfs")
             .args([
@@ -74,6 +83,7 @@ pub fn force_converge_children(pool: &str) -> Result<()> {
             .context("zfs get encryptionroot")?;
         let s = String::from_utf8_lossy(&out.stdout);
         let mut pending: Vec<String> = Vec::new();
+
         for line in s.lines() {
             let mut it = line.split_whitespace();
             let name = it.next().unwrap_or_default();
@@ -99,8 +109,12 @@ pub fn force_converge_children(pool: &str) -> Result<()> {
                 .stdin(Stdio::piped())
                 .spawn()
                 .with_context(|| format!("spawn change-key -i {ds}"))?;
-            cmd.stdin.as_mut().unwrap().write_all(b"inherit\n")?;
-            let _ = cmd.wait()?;
+            cmd.stdin
+                .as_mut()
+                .ok_or_else(|| anyhow!("stdin not available for zfs change-key"))?
+                .write_all(b"inherit\n")
+                .context("write 'inherit' to zfs change-key")?;
+            let _ = cmd.wait();
         }
     }
     // Final check
@@ -114,7 +128,8 @@ pub fn force_converge_children(pool: &str) -> Result<()> {
             "encryptionroot",
             pool,
         ])
-        .output()?;
+        .output()
+        .context("zfs get encryptionroot (final)")?;
     let s = String::from_utf8_lossy(&out.stdout);
     for line in s.lines() {
         let mut it = line.split_whitespace();
@@ -132,19 +147,34 @@ pub fn force_converge_children(pool: &str) -> Result<()> {
 }
 
 pub fn self_test_dual_unlock(key_path: &str) -> Result<()> {
-    // Non-invasive: tiny 1 MiB file vdev
-    let vdev = "/tmp/zfstestfile";
-    let _ = Command::new("bash")
+    // Non-invasive ZFS test using a 128 MiB file vdev (>= 64 MiB minimum)
+    let vdev_file = "/tmp/zfs_test.img";
+
+    // Ensure no leftover pool from prior runs
+    let _ = Command::new("zpool")
+        .args(["destroy", "-f", "zfstestpool"])
+        .status();
+    let _ = Command::new("rm").args(["-f", vdev_file]).status();
+
+    // Allocate 128 MiB sparse file (fast). Use dd if you prefer non-sparse.
+    let alloc = Command::new("bash")
         .args([
             "-lc",
-            &format!("dd if=/dev/urandom of={vdev} bs=1M count=1 status=none"),
+            &format!("truncate -s 128M {vdev_file} || dd if=/dev/zero of={vdev_file} bs=1M count=128 status=none conv=fsync"),
         ])
-        .status()?;
+        .status()
+        .context("allocating 128 MiB test image")?;
+    if !alloc.success() {
+        return Err(anyhow!("failed to allocate test image at {vdev_file}"));
+    }
 
+    // Create a pool on the file vdev
     let st = Command::new("zpool")
-        .args(["create", "-f", "zfstestpool", vdev])
-        .status()?;
+        .args(["create", "-f", "zfstestpool", vdev_file])
+        .status()
+        .context("zpool create zfstestpool failed to execute")?;
     if !st.success() {
+        let _ = Command::new("rm").args(["-f", vdev_file]).status();
         return Err(anyhow!("zpool create zfstestpool failed"));
     }
 
@@ -161,9 +191,15 @@ pub fn self_test_dual_unlock(key_path: &str) -> Result<()> {
             "zfstestpool/dummy",
         ])
         .stdin(Stdio::piped())
-        .spawn()?;
-    child.stdin.as_mut().unwrap().write_all(b"testpass\n")?;
-    let _ = child.wait()?;
+        .spawn()
+        .context("zfs create (encrypted dataset) spawn failed")?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| anyhow!("stdin not available for zfs create"))?
+        .write_all(b"testpass\n")
+        .context("writing passphrase to zfs create")?;
+    let _ = child.wait();
 
     // Rotate to raw key file
     let mut rot = Command::new("zfs")
@@ -176,9 +212,14 @@ pub fn self_test_dual_unlock(key_path: &str) -> Result<()> {
             "zfstestpool/dummy",
         ])
         .stdin(Stdio::piped())
-        .spawn()?;
-    rot.stdin.as_mut().unwrap().write_all(b"testpass\n")?;
-    let _ = rot.wait()?;
+        .spawn()
+        .context("zfs change-key (rotate to raw) spawn failed")?;
+    rot.stdin
+        .as_mut()
+        .ok_or_else(|| anyhow!("stdin not available for zfs change-key rotate"))?
+        .write_all(b"testpass\n")
+        .context("writing passphrase to rotate")?;
+    let _ = rot.wait();
 
     // Test keyfile path
     let _ = Command::new("zfs")
@@ -191,12 +232,13 @@ pub fn self_test_dual_unlock(key_path: &str) -> Result<()> {
             &format!("file://{key_path}"),
             "zfstestpool/dummy",
         ])
-        .status()?;
+        .status()
+        .context("zfs load-key (file) failed to execute")?;
     if !st.success() {
         let _ = Command::new("zpool")
             .args(["destroy", "-f", "zfstestpool"])
             .status();
-        let _ = Command::new("rm").args(["-f", vdev]).status();
+        let _ = Command::new("rm").args(["-f", vdev_file]).status();
         return Err(anyhow!("Keyfile load failed"));
     }
 
@@ -207,14 +249,20 @@ pub fn self_test_dual_unlock(key_path: &str) -> Result<()> {
     let mut loadp = Command::new("zfs")
         .args(["load-key", "zfstestpool/dummy"])
         .stdin(Stdio::piped())
-        .spawn()?;
-    loadp.stdin.as_mut().unwrap().write_all(b"testpass\n")?;
-    let _ = loadp.wait()?;
+        .spawn()
+        .context("zfs load-key (prompt) spawn failed")?;
+    loadp
+        .stdin
+        .as_mut()
+        .ok_or_else(|| anyhow!("stdin not available for zfs load-key prompt"))?
+        .write_all(b"testpass\n")
+        .context("writing passphrase to load-key")?;
+    let _ = loadp.wait();
 
     // Cleanup
     let _ = Command::new("zpool")
         .args(["destroy", "-f", "zfstestpool"])
         .status();
-    let _ = Command::new("rm").args(["-f", vdev]).status();
+    let _ = Command::new("rm").args(["-f", vdev_file]).status();
     Ok(())
 }
