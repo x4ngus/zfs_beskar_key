@@ -6,9 +6,9 @@
 
 ## Background
 
-The goal was clear: create a **reliable and safe** method to auto-unlock ZFS-on-root using a USB key, without ever sacrificing the fallback passphrase or bricking the system.
+The goal was clear: create a **reliable and safe** method to auto-unlock ZFS encryption using a USB key, hardening the modern Linux environment.
 
-Bash failed.  
+Through trial and error, Bash failed.  
 
 Systemd units fought the boot order. So this was reforged in **Rust**, with precision and patience — just as the Armorer would demand.
 
@@ -171,7 +171,4 @@ MIT — see [LICENSE](LICENSE).
 
 **Angus Jones**
 Technical Account Manager – OT Cybersecurity
-
----
-
 > **This is the way.**
