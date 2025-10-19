@@ -1,92 +1,132 @@
-use anyhow::{anyhow, bail, Context, Result};
-use colored::Colorize;
-use dialoguer::{Select};
+use anyhow::{anyhow, Context, Result};
+use serde::Deserialize;
+use std::io::{self, Write};
 use std::process::Command;
 
-fn is_usb(dev: &str) -> Result<bool> {
-    // Use udev to verify it's truly USB
-    let out = Command::new("udevadm")
-        .args(["info", "-q", "property", "-n", dev])
-        .output()
-        .context("udevadm info failed")?;
-    let s = String::from_utf8_lossy(&out.stdout);
-    Ok(s.contains("ID_BUS=usb"))
+#[derive(Debug, Deserialize)]
+struct Lsblk {
+    blockdevices: Vec<BlockDev>,
+}
+#[derive(Debug, Deserialize)]
+struct BlockDev {
+    name: String,
+    #[serde(default)]
+    size: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    mountpoint: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    children: Option<Vec<BlockDev>>,
 }
 
-pub fn choose_usb_device() -> Result<String> {
-    // list all /dev/sd* and /dev/nvme* partitions; then filter by udev usb
+fn is_usb_disk(dev: &str) -> bool {
+    // Check udev for ID_BUS=usb on parent disk
+    let out = Command::new("udevadm")
+        .args(["info", "-q", "property", "-n", dev])
+        .output();
+    if let Ok(o) = out {
+        let s = String::from_utf8_lossy(&o.stdout);
+        return s.contains("ID_BUS=usb");
+    }
+    false
+}
+
+pub fn select_usb_partition() -> Result<String> {
+    // Parse JSON for reliability
     let out = Command::new("lsblk")
-        .args(["-dpno", "NAME,TYPE,SIZE,MODEL,RM"])
+        .args(["-J", "-o", "NAME,TYPE,RM,SIZE,MODEL,MOUNTPOINT"])
         .output()
         .context("lsblk failed")?;
-    let list = String::from_utf8_lossy(&out.stdout);
-    let mut rows: Vec<(String, String)> = vec![]; // (dev, pretty)
+    let parsed: Lsblk = serde_json::from_slice(&out.stdout).context("lsblk JSON parse")?;
 
-    for line in list.lines() {
-        // e.g. "/dev/sda1 part 28.7G SanDisk 1"
-        let cols: Vec<_> = line.split_whitespace().collect();
-        if cols.len() < 5 { continue; }
-        let name = cols[0].to_string();
-        let ty = cols[1];
-        let size = cols[2];
-        let model = cols[3..cols.len()-1].join(" ");
-        let _rm = cols.last().unwrap();
-
-        if ty != "part" { continue; }
-        // verify USB by udev (parent block dev)
-        let parent = Command::new("lsblk").args(["-no","PKNAME", &name]).output()?;
-        let parent = String::from_utf8_lossy(&parent.stdout).trim().to_string();
-        if parent.is_empty() { continue; }
-        let parent_path = format!("/dev/{}", parent);
-        if !is_usb(&parent_path)? { continue; }  // only true USB
-
-        // skip common system partitions by name
-        if name.contains("nvme0n1p2") || name.contains("nvme0n1p3") || name.contains("nvme0n1p4") {
+    // Collect partitions whose parent disk is USB
+    let mut candidates: Vec<(String, String)> = Vec::new(); // (devpath, label)
+    for dev in &parsed.blockdevices {
+        // Only look at "disk" entries; iterate their children parts
+        let disk_path = format!("/dev/{}", dev.name);
+        if !is_usb_disk(&disk_path) {
             continue;
         }
-
-        rows.push((name.clone(), format!("{:<16} {:>7}  {}", name, size, model)));
+        if let Some(children) = &dev.children {
+            for part in children {
+                let devpath = format!("/dev/{}", part.name);
+                let size = part.size.clone().unwrap_or_default();
+                let model = dev.model.clone().unwrap_or_default();
+                let mnt = part.mountpoint.clone().unwrap_or("-".into());
+                let label = format!("{:<14} {:>7}  {:<20}  {}", part.name, size, model, mnt);
+                candidates.push((devpath, label));
+            }
+        }
     }
 
-    if rows.is_empty() {
-        return Err(anyhow!("No removable USB partitions detected (ID_BUS=usb). Insert a USB drive and try again."));
+    if candidates.is_empty() {
+        return Err(anyhow!(
+            "No removable USB partitions detected. Insert a USB and try again."
+        ));
     }
 
-    // present numeric menu
-    let items: Vec<String> = rows.iter().map(|(_, p)| p.clone()).collect();
-    println!("\n{}", "Available USB partitions (eligible to format):".bold().bright_white());
-    let idx = Select::new()
-        .with_prompt("Select the device to FORMAT as BESKARKEY")
-        .items(&items)
-        .default(0)
-        .interact()
-        .context("selection failed")?;
+    println!("\nAvailable USB partitions:");
+    for (i, (_, label)) in candidates.iter().enumerate() {
+        println!(" {:>2}) {}", i + 1, label);
+    }
 
-    Ok(rows[idx].0.clone())
+    print!("Select the # to FORMAT as BESKARKEY: ");
+    io::stdout().flush().ok();
+    let mut choice = String::new();
+    io::stdin().read_line(&mut choice)?;
+    let idx: usize = choice
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("Invalid number"))?;
+    let (devpath, _) = candidates
+        .get(idx - 1)
+        .ok_or_else(|| anyhow!("Choice out of range"))?;
+    Ok(devpath.clone())
 }
 
 pub fn format_and_copy_key(dev: &str, label: &str, key_path: &str, key_name: &str) -> Result<()> {
-    // mkfs ext4
-    Command::new("mkfs.ext4")
+    // Defensive unmount (best-effort)
+    let _ = Command::new("umount").arg(dev).output();
+
+    // Format as ext4 + label
+    let st = Command::new("mkfs.ext4")
         .args(["-F", "-L", label, dev])
         .status()
         .context("mkfs.ext4 failed")?;
-    Command::new("udevadm").args(["trigger"]).status().ok();
-    Command::new("udevadm").args(["settle","--timeout=10"]).status().ok();
+    if !st.success() {
+        return Err(anyhow!("mkfs.ext4 returned non-zero"));
+    }
 
-    // mount, copy key, umount
-    let mountpoint = "/mnt/usb";
-    std::fs::create_dir_all(mountpoint).ok();
-    Command::new("mount")
-        .args([&format!("/dev/disk/by-label/{}", label), mountpoint])
+    // udev settle
+    let _ = Command::new("udevadm").args(["trigger"]).status();
+    let _ = Command::new("udevadm")
+        .args(["settle", "--timeout=10"])
+        .status();
+
+    // Mount by label
+    let mnt = "/mnt/usb";
+    let _ = Command::new("mkdir").args(["-p", mnt]).status();
+    let st = Command::new("mount")
+        .args([&format!("/dev/disk/by-label/{}", label), mnt])
         .status()
-        .context("mount USB failed")?;
+        .context("mount failed")?;
+    if !st.success() {
+        return Err(anyhow!("mount returned non-zero"));
+    }
 
-    let dest = format!("{}/{}", mountpoint, key_name);
-    std::fs::copy(key_path, &dest).with_context(|| format!("copy {} -> {}", key_path, dest))?;
-    Command::new("chmod").args(["400", &dest]).status().ok();
-    Command::new("sync").status().ok();
-    Command::new("umount").args([mountpoint]).status().ok();
+    // Copy key
+    let dest = format!("{}/{}", mnt, key_name);
+    let st = Command::new("cp").args([key_path, &dest]).status()?;
+    if !st.success() {
+        let _ = Command::new("umount").arg(mnt).status();
+        return Err(anyhow!("copy key failed"));
+    }
+    let _ = Command::new("chmod").args(["400", &dest]).status();
+    let _ = Command::new("sync").status();
 
+    // Unmount
+    let _ = Command::new("umount").arg(mnt).status();
     Ok(())
 }

@@ -1,18 +1,28 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 const HOOK_DIR: &str = "/etc/dracut/modules.d/90zfs-usbkey";
-const MODULE_SETUP: &str = r#"#!/bin/bash
+
+pub fn install_hook(label: &str, key_name: &str) -> Result<()> {
+    fs::create_dir_all(HOOK_DIR).context("mkdir hook dir")?;
+
+    let module_setup = r#"#!/bin/bash
 check(){ return 0; }
 depends(){ echo zfs; }
 install(){ inst_hook pre-mount 00 "$moddir/zfs-usb-key.sh"; }
 "#;
+    fs::write(format!("{}/module-setup.sh", HOOK_DIR), module_setup)?;
+    fs::set_permissions(
+        format!("{}/module-setup.sh", HOOK_DIR),
+        fs::Permissions::from_mode(0o755),
+    )?;
 
-fn zfs_usb_key_sh(label: &str, keyfile: &str) -> String {
-    format!(r#"#!/bin/sh
+    let loader = format!(
+        r#"#!/bin/sh
 LABEL="{label}"
-KEYFILE="{keyfile}"
+KEYFILE="{key_name}"
 LOG="/run/initramfs/zfs-usb-key.log"
 RETRY=30
 
@@ -47,34 +57,35 @@ else
 fi
 
 exit 0
-"#, label=label, keyfile=keyfile)
-}
+"#
+    );
 
-pub fn install_hook(label: &str, key_name: &str) -> Result<()> {
-    fs::create_dir_all(HOOK_DIR).context("mkdir hook dir")?;
-    fs::write(format!("{}/module-setup.sh", HOOK_DIR), MODULE_SETUP).context("write module-setup.sh")?;
-    fs::set_permissions(format!("{}/module-setup.sh", HOOK_DIR), fs::Permissions::from_mode(0o755)).ok();
-    fs::write(format!("{}/zfs-usb-key.sh", HOOK_DIR), zfs_usb_key_sh(label, key_name)).context("write zfs-usb-key.sh")?;
-    fs::set_permissions(format!("{}/zfs-usb-key.sh", HOOK_DIR), fs::Permissions::from_mode(0o755)).ok();
+    fs::write(format!("{}/zfs-usb-key.sh", HOOK_DIR), loader)?;
+    fs::set_permissions(
+        format!("{}/zfs-usb-key.sh", HOOK_DIR),
+        fs::Permissions::from_mode(0o755),
+    )?;
     Ok(())
 }
 
-pub fn rebuild_initramfs() -> Result<()> {
-    let st = Command::new("dracut").args(["--force"]).status().context("dracut --force failed")?;
-    if !st.success() { bail!("dracut rebuild failed"); }
-    Ok(())
-}
+pub fn rebuild_and_verify() -> Result<()> {
+    let st = Command::new("dracut").args(["--force"]).status()?;
+    if !st.success() {
+        return Err(anyhow!("dracut --force failed"));
+    }
 
-pub fn verify_initramfs_contains() -> Result<()> {
-    // Verify the latest initramfs contains our script name
-    let out = Command::new("bash").args(["-lc", "ls -1t /boot/initramfs-* 2>/dev/null | head -n1"]).output()?;
+    let out = Command::new("bash")
+        .args(["-lc", "ls -1t /boot/initramfs-* 2>/dev/null | head -n1"])
+        .output()?;
     let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if path.is_empty() { bail!("No /boot/initramfs-* found"); }
+    if path.is_empty() {
+        return Err(anyhow!("No /boot/initramfs-* found"));
+    }
+
     let out = Command::new("lsinitrd").args([&path]).output()?;
     let s = String::from_utf8_lossy(&out.stdout);
-    if !s.contains("zfs-usb-key.sh") { bail!("Hook not embedded in initramfs"); }
+    if !s.contains("zfs-usb-key.sh") {
+        return Err(anyhow!("Hook not embedded in initramfs"));
+    }
     Ok(())
 }
-
-// unix perm helpers
-use std::os::unix::fs::PermissionsExt;
