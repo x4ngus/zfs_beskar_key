@@ -1,105 +1,118 @@
-use anyhow::Result;
+use colored::*;
 use crossterm::{
-    cursor::{MoveTo, Show},
-    execute,
-    style::{Color, Print, SetForegroundColor},
+    cursor::{Hide, MoveTo, Show},
     terminal::{Clear, ClearType},
+    ExecutableCommand,
 };
 use std::io::{stdout, Write};
-use std::{thread, time::Duration};
+use std::thread;
+use std::time::Duration;
 
-const BAR_W: u16 = 42;
-
-fn draw_bar(pct: u64, msg: &str) -> Result<()> {
-    let mut out = stdout();
-    let (_cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-    let row = rows.saturating_sub(2);
-
-    // Build bar
-    let filled = ((pct.min(100) as u16) * BAR_W / 100) as usize;
-    let empty = (BAR_W as usize).saturating_sub(filled);
-    let head = "[=▣]".to_string();
-    let beam = "━".repeat(filled);
-    let space = "·".repeat(empty);
-
-    // Clear bottom lines
-    execute!(out, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-    execute!(
-        out,
-        SetForegroundColor(Color::Red),
-        Print(format!("{head}{beam}{space} ▶ {:>3}%  ", pct.min(100)))
-    )?;
-    execute!(
-        out,
-        SetForegroundColor(Color::White),
-        Print(msg.to_string())
-    )?;
-
-    // One line above for step label area (kept clean)
-    execute!(
-        out,
-        MoveTo(0, row.saturating_sub(1)),
-        Clear(ClearType::CurrentLine)
-    )?;
-    out.flush()?;
-    Ok(())
+/// Persistent Mandalorian UI — draws the blaster bar and thematic messages
+pub struct BlasterUI {
+    total_steps: usize,
+    current_step: usize,
+    width: usize,
 }
 
-pub fn banner(title: &str) -> Result<()> {
-    let mut out = stdout();
-    execute!(out, Clear(ClearType::All), MoveTo(0, 0))?;
-    execute!(
-        out,
-        SetForegroundColor(Color::White),
-        Print(format!("{title}\n"))
-    )?;
-    execute!(
-        out,
-        SetForegroundColor(Color::Red),
-        Print("──────────────────────────────────────────────────────────\n")
-    )?;
-    Ok(())
-}
+impl BlasterUI {
+    pub fn new(total_steps: usize) -> Self {
+        let mut stdout = stdout();
+        let _ = stdout.execute(Hide);
+        Self {
+            total_steps,
+            current_step: 0,
+            width: 50,
+        }
+    }
 
-pub fn progress(pct: u64, msg: &str) -> Result<()> {
-    draw_bar(pct, msg)?;
-    thread::sleep(Duration::from_millis(200)); // subtle "pew"
-    Ok(())
-}
+    pub fn section(&mut self, title: &str, subtitle: &str, color: &str) {
+        let mut stdout = stdout();
+        let banner = match color {
+            "red" => format!("🔥 {}", title.bold().red()),
+            "blue" => format!("💠 {}", title.bold().blue()),
+            "yellow" => format!("⚙️  {}", title.bold().yellow()),
+            _ => title.bold().to_string(),
+        };
 
-pub fn step(msg: &str) {
-    let mut out = stdout();
-    let _ = execute!(
-        out,
-        SetForegroundColor(Color::Yellow),
-        Print(format!("\n➡️  {msg}\n"))
-    );
-}
+        stdout.execute(Clear(ClearType::FromCursorDown)).unwrap();
+        println!("\n{}", banner);
+        println!("{}", subtitle.dimmed());
+        thread::sleep(Duration::from_secs(2));
+    }
 
-pub fn pause(secs: u64) {
-    thread::sleep(Duration::from_secs(secs));
-}
+    /// Show a brief system log or step confirmation
+    pub fn log(&self, msg: &str) {
+        println!("{} {}", "▸".bright_black(), msg.white());
+        stdout().flush().unwrap();
+        thread::sleep(Duration::from_millis(400));
+    }
 
-pub fn done(msg: &str) {
-    let mut out = stdout();
-    let _ = execute!(
-        out,
-        SetForegroundColor(Color::Green),
-        Print(format!("\n✅ {msg}\n"))
-    );
-    let _ = execute!(out, Show);
-}
+    /// Animate the blaster beam progress bar
+    pub fn progress(&mut self, label: &str) {
+        self.current_step += 1;
+        let pct = ((self.current_step as f32 / self.total_steps as f32) * 100.0) as usize;
+        let filled = (self.width * pct) / 100;
+        let empty = self.width - filled;
 
-pub fn quote() {
-    let mut out = stdout();
-    let _ = execute!(
-        out,
-        SetForegroundColor(Color::Cyan),
-        Print("\n“It is with these scraps of beskar that I forged your next piece of armor;\n"),
-        Print("  Mandalorian steel shall keep you safe as you grow stronger.”\n"),
-        SetForegroundColor(Color::White),
-        Print("\n                     — The Armorer\n"),
-        SetForegroundColor(Color::Red),
-        Print("                         This is the way.\n")
-    );
+        let beam = format!(
+            "[{}{}▶] {:>3}%  {}",
+            "=".repeat(filled).red(),
+            "·".repeat(empty).bright_black(),
+            pct,
+            label
+        );
+
+        let mut stdout = stdout();
+        stdout.execute(MoveTo(0, 30)).unwrap();
+        print!("{}", beam.bold());
+        stdout.flush().unwrap();
+        thread::sleep(Duration::from_millis(800));
+    }
+
+    /// Prompt user with colorized input
+    pub fn prompt(&self, question: &str) -> String {
+        use std::io::{self, BufRead};
+
+        print!(
+            "\n{} {} {} ",
+            "💬".cyan(),
+            question.bold().white(),
+            "[y/n]".dimmed()
+        );
+        stdout().flush().unwrap();
+
+        let stdin = io::stdin();
+        let mut answer = String::new();
+        stdin.lock().read_line(&mut answer).unwrap();
+        let trimmed = answer.trim().to_lowercase();
+
+        if trimmed == "y" {
+            println!("{}", "This is the way.".italic().blue());
+        } else {
+            println!("{}", "As you wish, bounty hunter.".italic().red());
+        }
+
+        trimmed
+    }
+
+    /// Show final completion message
+    pub fn complete(&self) {
+        let mut stdout = stdout();
+        stdout.execute(MoveTo(0, 32)).unwrap();
+        println!(
+            "{}",
+            "[██████████████████████████████████████████████████] 100%  Forge Complete"
+                .bold()
+                .green()
+        );
+        println!(
+            "\n{}\n",
+            "\"It is with these scraps of beskar that I forged your next piece of armor; \
+             Mandalorian steel shall keep you safe as you grow stronger.\""
+                .italic()
+                .white()
+        );
+        let _ = stdout.execute(Show);
+    }
 }
