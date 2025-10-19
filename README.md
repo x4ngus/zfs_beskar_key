@@ -2,6 +2,8 @@
 
 # ZFS Beskar Key
 
+<img width="860" height="430" alt="image" src="https://github.com/user-attachments/assets/309192cc-9f2b-42ac-b36a-918083e472ef" />
+
 ## Background
 
 The goal was clear: create a **reliable and safe** method to auto-unlock ZFS-on-root using a USB key, without ever sacrificing the fallback passphrase or bricking the system.
