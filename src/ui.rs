@@ -46,6 +46,16 @@ impl ForgeUI {
         Ok(())
     }
 
+    pub fn substep(&self, msg: &str) -> anyhow::Result<()> {
+        use crossterm::style::{Color, Stylize};
+        println!(
+            "{} {}",
+            "    ↳".with(Color::DarkGrey),
+            msg.with(Color::DarkCyan)
+        );
+        Ok(())
+    }
+
     /// Updates the bottom-anchored blaster progress bar.
     pub fn blaster(&mut self, percent: u8, msg: &str) -> Result<()> {
         self.progress = percent;
