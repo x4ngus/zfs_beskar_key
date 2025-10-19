@@ -5,13 +5,11 @@ use crossterm::{
     terminal::{size, Clear, ClearType},
     ExecutableCommand,
 };
-use std::{
-    io::{self, Write},
-    thread,
-    time::{Duration, Instant},
-};
+use std::io::{self, Write};
+use std::thread;
+use std::time::{Duration, Instant};
 
-/// Struct to handle unified, cinematic UI control.
+/// Unified cinematic UI controller (Mandalorian forge theme).
 pub struct ForgeUI {
     width: u16,
     height: u16,
@@ -20,34 +18,34 @@ pub struct ForgeUI {
 
 impl ForgeUI {
     pub fn new() -> Result<Self> {
-        let (width, height) = size()?;
+        let (w, h) = size()?;
         io::stdout().execute(Hide)?;
         Ok(Self {
-            width,
-            height,
+            width: w,
+            height: h.max(3),
             progress: 0,
         })
     }
 
-    /// Draws a centered Mandalorian banner.
+    /// Title banner.
     pub fn banner(&mut self, title: &str) -> Result<()> {
-        let mut stdout = io::stdout();
-        stdout.execute(Clear(ClearType::All))?;
-        let center = (self.width.saturating_sub(title.len() as u16)) / 2;
-        stdout.execute(MoveTo(center, 2))?;
+        let mut out = io::stdout();
+        out.execute(Clear(ClearType::All))?;
+        let center = (self.width.saturating_sub(title.len() as u16 + 4)) / 2;
+        out.execute(MoveTo(center, 1))?;
         println!("{}", format!("💠 {title} 💠").bold().cyan());
-        stdout.flush()?;
+        out.flush()?;
         Ok(())
     }
 
-    /// Prints a forge narrative step line.
-    pub fn step(&mut self, msg: &str) -> Result<()> {
-        println!("\n{}\n", format!("▸ {msg}").bold().white());
+    /// Major step (bold, prominent).
+    pub fn step(&self, msg: &str) -> Result<()> {
+        println!("\n{}", format!("▸ {msg}").bold().white());
         Ok(())
     }
 
-    pub fn substep(&self, msg: &str) -> anyhow::Result<()> {
-        use crossterm::style::{Color, Stylize};
+    /// Sub-step (indented, subtle).
+    pub fn substep(&self, msg: &str) -> Result<()> {
         println!(
             "{} {}",
             "    ↳".with(Color::DarkGrey),
@@ -56,33 +54,36 @@ impl ForgeUI {
         Ok(())
     }
 
-    /// Updates the bottom-anchored blaster progress bar.
+    /// Bottom-anchored blaster progress bar.
     pub fn blaster(&mut self, percent: u8, msg: &str) -> Result<()> {
-        self.progress = percent;
-        let mut stdout = io::stdout();
-        let bar_y = self.height.saturating_sub(2);
-        let filled = (percent as usize * 50) / 100;
-        let empty = 50 - filled;
-        let beam = "━".repeat(filled).with(Color::Red);
-        let rest = "·".repeat(empty).dark_grey();
+        self.progress = percent.min(100);
+        let mut out = io::stdout();
+        let width_units = 50usize;
+        let filled = (self.progress as usize * width_units) / 100;
+        let empty = width_units - filled;
 
-        stdout.execute(MoveTo(0, bar_y))?;
-        stdout.execute(Clear(ClearType::CurrentLine))?;
+        let beam = "━".repeat(filled).with(Color::Red);
+        let rest = "·".repeat(empty).with(Color::DarkGrey);
+
+        let y = self.height.saturating_sub(2);
+        out.execute(MoveTo(0, y))?;
+        out.execute(Clear(ClearType::CurrentLine))?;
         write!(
-            stdout,
+            out,
             "[{}{}] {:>3}%  {}",
             beam,
             rest,
-            percent,
+            self.progress,
             msg.bold().white()
         )?;
-        stdout.flush()?;
+        out.flush()?;
         Ok(())
     }
 
-    /// Emits a blaster-rifle pulse animation.
-    pub fn blast(&mut self, duration_ms: u64) -> Result<()> {
+    /// Quick “muzzle flash” pulse effect (cosmetic).
+    pub fn blast(&self, duration_ms: u64) -> Result<()> {
         let start = Instant::now();
+        let mut out = io::stdout();
         while start.elapsed().as_millis() < duration_ms as u128 {
             let phase = (start.elapsed().as_millis() % 400) as u16;
             let color = if phase < 200 {
@@ -90,40 +91,44 @@ impl ForgeUI {
             } else {
                 Color::DarkRed
             };
-            let mut stdout = io::stdout();
-            stdout.execute(MoveTo(0, self.height.saturating_sub(1)))?;
-            stdout.execute(Clear(ClearType::CurrentLine))?;
-            write!(stdout, "{}", "⚡".with(color))?;
-            stdout.flush()?;
+            let y = self.height.saturating_sub(1);
+            out.execute(MoveTo(0, y))?;
+            out.execute(Clear(ClearType::CurrentLine))?;
+            write!(out, "{}", "⚡".with(color))?;
+            out.flush()?;
             thread::sleep(Duration::from_millis(60));
         }
+        // clear flash line
+        let y = self.height.saturating_sub(1);
+        out.execute(MoveTo(0, y))?;
+        out.execute(Clear(ClearType::CurrentLine))?;
         Ok(())
     }
 
-    /// Pause to let the user absorb the step visually.
+    /// Small delay for pacing.
     pub fn pause(&self, seconds: u64) {
         thread::sleep(Duration::from_secs(seconds));
     }
 
-    /// Displays a green completion message.
+    /// Completion tick.
     pub fn done(&self, msg: &str) -> Result<()> {
-        println!("\n{}\n", format!("✅ {msg}").bold().green());
+        println!("\n{}", format!("✅ {msg}").bold().green());
         Ok(())
     }
 
-    /// Epic Mandalorian outro quote.
+    /// Mandalorian outro quote.
     pub fn quote(&self) -> Result<()> {
         println!(
             "\n{}\n",
             "\"It is with these scraps of beskar that I forged your next piece of armor; \
-            Mandalorian steel shall keep you safe as you grow stronger.\""
+             Mandalorian steel shall keep you safe as you grow stronger.\""
                 .italic()
                 .white()
         );
         Ok(())
     }
 
-    /// Cleanly restore cursor and terminal state.
+    /// Restore terminal state.
     pub fn close(&self) -> Result<()> {
         io::stdout().execute(Show)?;
         Ok(())
