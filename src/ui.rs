@@ -1,118 +1,121 @@
-use colored::*;
+use anyhow::Result;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    terminal::{Clear, ClearType},
+    style::{Color, Stylize},
+    terminal::{size, Clear, ClearType},
     ExecutableCommand,
 };
-use std::io::{stdout, Write};
-use std::thread;
-use std::time::Duration;
+use std::{
+    io::{self, Write},
+    thread,
+    time::{Duration, Instant},
+};
 
-/// Persistent Mandalorian UI — draws the blaster bar and thematic messages
-pub struct BlasterUI {
-    total_steps: usize,
-    current_step: usize,
-    width: usize,
+/// Struct to handle unified, cinematic UI control.
+pub struct ForgeUI {
+    width: u16,
+    height: u16,
+    progress: u8,
 }
 
-impl BlasterUI {
-    pub fn new(total_steps: usize) -> Self {
-        let mut stdout = stdout();
-        let _ = stdout.execute(Hide);
-        Self {
-            total_steps,
-            current_step: 0,
-            width: 50,
+impl ForgeUI {
+    pub fn new() -> Result<Self> {
+        let (width, height) = size()?;
+        io::stdout().execute(Hide)?;
+        Ok(Self {
+            width,
+            height,
+            progress: 0,
+        })
+    }
+
+    /// Draws a centered Mandalorian banner.
+    pub fn banner(&mut self, title: &str) -> Result<()> {
+        let mut stdout = io::stdout();
+        stdout.execute(Clear(ClearType::All))?;
+        let center = (self.width.saturating_sub(title.len() as u16)) / 2;
+        stdout.execute(MoveTo(center, 2))?;
+        println!("{}", format!("💠 {title} 💠").bold().cyan());
+        stdout.flush()?;
+        Ok(())
+    }
+
+    /// Prints a forge narrative step line.
+    pub fn step(&mut self, msg: &str) -> Result<()> {
+        println!("\n{}\n", format!("▸ {msg}").bold().white());
+        Ok(())
+    }
+
+    /// Updates the bottom-anchored blaster progress bar.
+    pub fn blaster(&mut self, percent: u8, msg: &str) -> Result<()> {
+        self.progress = percent;
+        let mut stdout = io::stdout();
+        let bar_y = self.height.saturating_sub(2);
+        let filled = (percent as usize * 50) / 100;
+        let empty = 50 - filled;
+        let beam = "━".repeat(filled).with(Color::Red);
+        let rest = "·".repeat(empty).dark_grey();
+
+        stdout.execute(MoveTo(0, bar_y))?;
+        stdout.execute(Clear(ClearType::CurrentLine))?;
+        write!(
+            stdout,
+            "[{}{}] {:>3}%  {}",
+            beam,
+            rest,
+            percent,
+            msg.bold().white()
+        )?;
+        stdout.flush()?;
+        Ok(())
+    }
+
+    /// Emits a blaster-rifle pulse animation.
+    pub fn blast(&mut self, duration_ms: u64) -> Result<()> {
+        let start = Instant::now();
+        while start.elapsed().as_millis() < duration_ms as u128 {
+            let phase = (start.elapsed().as_millis() % 400) as u16;
+            let color = if phase < 200 {
+                Color::Red
+            } else {
+                Color::DarkRed
+            };
+            let mut stdout = io::stdout();
+            stdout.execute(MoveTo(0, self.height.saturating_sub(1)))?;
+            stdout.execute(Clear(ClearType::CurrentLine))?;
+            write!(stdout, "{}", "⚡".with(color))?;
+            stdout.flush()?;
+            thread::sleep(Duration::from_millis(60));
         }
+        Ok(())
     }
 
-    pub fn section(&mut self, title: &str, subtitle: &str, color: &str) {
-        let mut stdout = stdout();
-        let banner = match color {
-            "red" => format!("🔥 {}", title.bold().red()),
-            "blue" => format!("💠 {}", title.bold().blue()),
-            "yellow" => format!("⚙️  {}", title.bold().yellow()),
-            _ => title.bold().to_string(),
-        };
-
-        stdout.execute(Clear(ClearType::FromCursorDown)).unwrap();
-        println!("\n{}", banner);
-        println!("{}", subtitle.dimmed());
-        thread::sleep(Duration::from_secs(2));
+    /// Pause to let the user absorb the step visually.
+    pub fn pause(&self, seconds: u64) {
+        thread::sleep(Duration::from_secs(seconds));
     }
 
-    /// Show a brief system log or step confirmation
-    pub fn log(&self, msg: &str) {
-        println!("{} {}", "▸".bright_black(), msg.white());
-        stdout().flush().unwrap();
-        thread::sleep(Duration::from_millis(400));
+    /// Displays a green completion message.
+    pub fn done(&self, msg: &str) -> Result<()> {
+        println!("\n{}\n", format!("✅ {msg}").bold().green());
+        Ok(())
     }
 
-    /// Animate the blaster beam progress bar
-    pub fn progress(&mut self, label: &str) {
-        self.current_step += 1;
-        let pct = ((self.current_step as f32 / self.total_steps as f32) * 100.0) as usize;
-        let filled = (self.width * pct) / 100;
-        let empty = self.width - filled;
-
-        let beam = format!(
-            "[{}{}▶] {:>3}%  {}",
-            "=".repeat(filled).red(),
-            "·".repeat(empty).bright_black(),
-            pct,
-            label
-        );
-
-        let mut stdout = stdout();
-        stdout.execute(MoveTo(0, 30)).unwrap();
-        print!("{}", beam.bold());
-        stdout.flush().unwrap();
-        thread::sleep(Duration::from_millis(800));
-    }
-
-    /// Prompt user with colorized input
-    pub fn prompt(&self, question: &str) -> String {
-        use std::io::{self, BufRead};
-
-        print!(
-            "\n{} {} {} ",
-            "💬".cyan(),
-            question.bold().white(),
-            "[y/n]".dimmed()
-        );
-        stdout().flush().unwrap();
-
-        let stdin = io::stdin();
-        let mut answer = String::new();
-        stdin.lock().read_line(&mut answer).unwrap();
-        let trimmed = answer.trim().to_lowercase();
-
-        if trimmed == "y" {
-            println!("{}", "This is the way.".italic().blue());
-        } else {
-            println!("{}", "As you wish, bounty hunter.".italic().red());
-        }
-
-        trimmed
-    }
-
-    /// Show final completion message
-    pub fn complete(&self) {
-        let mut stdout = stdout();
-        stdout.execute(MoveTo(0, 32)).unwrap();
-        println!(
-            "{}",
-            "[██████████████████████████████████████████████████] 100%  Forge Complete"
-                .bold()
-                .green()
-        );
+    /// Epic Mandalorian outro quote.
+    pub fn quote(&self) -> Result<()> {
         println!(
             "\n{}\n",
             "\"It is with these scraps of beskar that I forged your next piece of armor; \
-             Mandalorian steel shall keep you safe as you grow stronger.\""
+            Mandalorian steel shall keep you safe as you grow stronger.\""
                 .italic()
                 .white()
         );
-        let _ = stdout.execute(Show);
+        Ok(())
+    }
+
+    /// Cleanly restore cursor and terminal state.
+    pub fn close(&self) -> Result<()> {
+        io::stdout().execute(Show)?;
+        Ok(())
     }
 }

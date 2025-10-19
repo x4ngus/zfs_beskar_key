@@ -4,7 +4,7 @@ mod usb;
 mod zfs;
 
 use anyhow::{Context, Result};
-use ui::BlasterUI;
+use ui::ForgeUI;
 
 const POOL: &str = "rpool";
 const USB_LABEL: &str = "BESKARKEY";
@@ -13,110 +13,61 @@ const KEY_NAME: &str = "holocron.key";
 const KEY_PATH: &str = "/etc/zfs/keys/holocron.key";
 
 fn main() -> Result<()> {
-    // Initialize Mandalorian Blaster UI
-    let mut ui = BlasterUI::new(7);
+    let mut forge = ForgeUI::new()?;
 
-    // ─────────────────────────────
-    // 0. Preflight checks
-    // ─────────────────────────────
-    ui.section(
-        "Checking Environment",
-        "Scanning for ZFS binaries and dracut modules",
-        "red",
-    );
-    ui.log("/usr/sbin/zfs, /usr/sbin/zpool, /usr/bin/dracut verified");
-    zfs::preflight(POOL)
-        .context("Preflight check failed: missing zfs/zpool/dracut/lsinitrd/udevadm or rpool")?;
-    ui.progress("Checking environment");
+    // Opening cinematic
+    forge.banner(r#"ZFS USB SECURITY KEY — "This is the Way.""#)?;
+    forge.blast(1200)?;
+    forge.step("Initializing the forge — verifying your environment")?;
+    forge.blaster(5, "Checking tools and pool integrity")?;
+    zfs::preflight(POOL).context("Preflight check failed: required tool or pool missing")?;
+    forge.pause(1);
 
-    // ─────────────────────────────
-    // 1. Key creation / attach to rpool
-    // ─────────────────────────────
-    ui.section(
-        "Forging Beskar Ingot",
-        "Generating and attaching encryption key",
-        "yellow",
-    );
-    ui.log("Generating 32-byte key & binding to rpool...");
-    zfs::ensure_raw_key(KEY_DIR, KEY_PATH, POOL)
-        .context("Failed to create or attach raw key to rpool")?;
+    // Step 1: Generate/attach encryption key
+    forge.step("Forging the beskar ingot — generating your encryption key")?;
+    forge.blaster(15, "Creating raw key material")?;
+    zfs::ensure_raw_key(KEY_DIR, KEY_PATH, POOL).context("Failed to attach raw key to rpool")?;
     zfs::set_prop(POOL, "keylocation", "prompt")?;
-    ui.progress("Binding encryption key");
+    forge.pause(1);
 
-    // ─────────────────────────────
-    // 2. USB detection and formatting
-    // ─────────────────────────────
-    ui.section(
-        "Tempering the Forge",
-        "Detecting removable USB partitions",
-        "blue",
-    );
-    ui.log("Enumerating connected USB drives...");
-    let dev = usb::select_usb_partition().context("No suitable USB device found")?;
-    ui.progress("Enumerating USB");
+    // Step 2: USB selection and copy
+    forge.step("Tempering the forge — select your USB for the key")?;
+    forge.blaster(30, "Enumerating removable devices")?;
+    let dev = usb::select_usb_partition().context("USB selection failed")?;
+    forge.pause(1);
 
-    let confirm = ui.prompt("Proceed with formatting the selected USB drive?");
-    if confirm != "y" {
-        println!("Aborted by user. The forge cools silently...");
-        return Ok(());
-    }
-
-    ui.log("Formatting ext4 filesystem, labeling, and engraving key...");
+    forge.step("Binding the clans — formatting USB and sealing key")?;
+    forge.blaster(45, "Formatting ext4, labeling as BESKARKEY")?;
     usb::format_and_copy_key(&dev, USB_LABEL, KEY_PATH, KEY_NAME)
-        .context("Failed to format and copy key to USB")?;
-    ui.progress("Formatting and copying key");
+        .context("Failed to format or copy key to USB")?;
+    forge.pause(1);
 
-    // ─────────────────────────────
-    // 3. Unify encryption inheritance
-    // ─────────────────────────────
-    ui.section(
-        "Engraving Sigils",
-        "Unifying encryption roots across child datasets",
-        "yellow",
-    );
-    ui.log("Forcing all children of rpool to inherit keylocation from rpool");
+    // Step 3: Unify child datasets
+    forge.step("Engraving sigils — unifying all dataset keys")?;
+    forge.blaster(60, "Binding encryption roots to rpool")?;
     zfs::force_converge_children(POOL)
-        .context("Some child datasets are not inheriting rpool’s key")?;
-    ui.progress("Unifying encryption roots");
+        .context("Datasets still independent after inheritance pass")?;
+    forge.pause(1);
 
-    // ─────────────────────────────
-    // 4. Install Dracut hook and rebuild initramfs
-    // ─────────────────────────────
-    ui.section(
-        "Etching Runes",
-        "Installing Dracut hook and rebuilding initramfs",
-        "red",
-    );
-    ui.log("Installing /usr/lib/dracut/modules.d/90zfs-usbkey...");
+    // Step 4: Install Dracut hook and rebuild initramfs
+    forge.step("Etching runes — integrating Dracut hook for autounlock")?;
+    forge.blaster(75, "Installing module and rebuilding initramfs")?;
     dracut::install_hook(USB_LABEL, KEY_NAME)?;
-    ui.log("Rebuilding initramfs with Dracut...");
     dracut::rebuild_and_verify()?;
-    ui.progress("Embedding hooks");
+    forge.pause(2);
 
-    // ─────────────────────────────
-    // 5. Run non-invasive verification test
-    // ─────────────────────────────
-    ui.section(
-        "Testing the Forge",
-        "Running non-invasive dual unlock self-test",
-        "blue",
-    );
-    ui.log("Testing both keyfile unlock and passphrase fallback...");
+    // Step 5: Test unlock and fallback
+    forge.step("Testing the forge — verifying keyfile and passphrase")?;
+    forge.blaster(90, "Performing non-invasive dual unlock test")?;
     zfs::self_test_dual_unlock(KEY_PATH)
-        .context("Self-test failed: keyfile or passphrase path broken")?;
-    ui.progress("Self-test verification");
+        .context("Self-test failed: keyfile or passphrase invalid")?;
+    forge.pause(1);
 
-    // ─────────────────────────────
-    // 6. Final completion sequence
-    // ─────────────────────────────
-    ui.section(
-        "Final Blessing",
-        "ZFS autounlock via USB keyfile verified",
-        "yellow",
-    );
-    ui.log("rpool and all child datasets bound to inherited encryption root.");
-    ui.progress("Forge Complete");
-    ui.complete();
+    // Completion
+    forge.blaster(100, "Final inspection — armor complete")?;
+    forge.done("✅ ZFS USB autounlock configured successfully!")?;
+    forge.quote()?;
+    forge.close()?;
 
     Ok(())
 }
