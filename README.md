@@ -39,17 +39,16 @@ ZFS Beskar Key automates secure USB-based key unlock for **ZFS-on-root systems**
 Ubuntu **25.10** (ZFS-on-root) or equivalent.
 
 System packages:
-```bash
+bash
 sudo apt update
 sudo apt install -y zfsutils-linux dracut-core lsblk udev mkfs.ext4
 ````
 
 **Rust toolchain (≥ 1.75):**
 
-```bash
+bash
 curl https://sh.rustup.rs -sSf | sh
 source "$HOME/.cargo/env"
-```
 
 ---
 
