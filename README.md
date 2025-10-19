@@ -1,26 +1,26 @@
-````markdown
-# 🛡️ ZFS Beskar Key
+[![Forge Verification](https://github.com/x4ngus/zfs_beskar_key/actions/workflows/rust.yml/badge.svg)](https://github.com/x4ngus/zfs_beskar_key/actions)  
 
-> *“The forge fires hot.”*
+# ZFS Beskar Key
 
----
+<img width="860" height="430" alt="image" src="https://github.com/user-attachments/assets/309192cc-9f2b-42ac-b36a-918083e472ef" />
 
-## 🧩 Background
+## Background
 
-The goal was clear: create a **reliable and safe** method to auto-unlock ZFS-on-root using a USB key, without ever sacrificing the fallback passphrase or bricking the system.
+The goal was clear: create a **reliable and safe** method to auto-unlock ZFS encryption using a USB key, hardening the modern Linux environment.
 
-Bash failed.  
+Through trial and error, Bash failed.  
+
 Systemd units fought the boot order. So this was reforged in **Rust**, with precision and patience — just as the Armorer would demand.
 
 ---
 
-## ⚙️ Purpose
+## Purpose
 
 ZFS Beskar Key automates secure USB-based key unlock for **ZFS-on-root systems** using **Dracut**. It ensures your encrypted pool can unlock automatically from a removable USB key, while still allowing manual passphrase unlock if the key is missing.
 
 ---
 
-## 🧱 What It Does
+## What It Does
 
 1. **Generates a 32-byte raw ZFS key** and binds it to `rpool` **without** removing your passphrase.
 2. **Detects removable USB partitions** via `lsblk -J` + `udevadm`; you select from a **numbered list** (no typing `/dev/*`).
@@ -34,25 +34,26 @@ ZFS Beskar Key automates secure USB-based key unlock for **ZFS-on-root systems**
 
 ---
 
-## 🔧 Dependencies
+## Dependencies
 
 Ubuntu **25.10** (ZFS-on-root) or equivalent.
 
 System packages:
+```
 bash
 sudo apt update
 sudo apt install -y zfsutils-linux dracut-core lsblk udev mkfs.ext4
-````
+```
 
 **Rust toolchain (≥ 1.75):**
-
+```
 bash
 curl https://sh.rustup.rs -sSf | sh
 source "$HOME/.cargo/env"
-
+```
 ---
 
-## 🧪 Trials in the Forge
+## Trials in the Forge
 
 Lessons learned from the failed attempts that shaped this tool:
 
@@ -65,7 +66,7 @@ This project survived multiple real rebuilds of Ubuntu 25.10 and initramfs recov
 
 ---
 
-## 🖥️ Build
+## Build
 
 ```bash
 git clone https://github.com/x4ngus/zfs_beskar_key.git
@@ -75,7 +76,7 @@ cargo build --release
 
 ---
 
-## 🚀 Run
+## Run
 
 Run with privileges (formatting, mounting, dracut, and ZFS operations require sudo):
 
@@ -95,7 +96,7 @@ A single red **blaster bar** animates progress across the bottom of the terminal
 
 ---
 
-## 🔐 Verify
+## Verify
 
 Pool bindings (post-setup):
 
@@ -125,7 +126,7 @@ sudo blkid -L BESKARKEY
 
 ---
 
-## 🧯 Uninstall / Rollback
+## Uninstall / Rollback
 
 Remove the Dracut module and rebuild:
 
@@ -138,7 +139,7 @@ Passphrase unlock remains available by design.
 
 ---
 
-## 🛠️ Tested Environment
+## Tested Environment
 
 | Component | Version                | Notes                           |
 | --------: | :--------------------- | :------------------------------ |
@@ -150,7 +151,7 @@ Passphrase unlock remains available by design.
 
 ---
 
-## 🧭 Roadmap
+## Roadmap
 
 * `--dry-run` (preview without changes)
 * `--uninstall` (clean rollback)
@@ -160,20 +161,14 @@ Passphrase unlock remains available by design.
 
 ---
 
-## 🪪 License
+## License
 
 MIT — see [LICENSE](LICENSE).
 
 ---
 
-## 👤 Author
+## Author
 
 **Angus Jones**
 Technical Account Manager – OT Cybersecurity
-Perth, Western Australia
-GitHub: [x4ngus](https://github.com/x4ngus)
-
----
-
-> *“The forge remembers every flame. Each boot, each unlock, each successful load — proof that strength lies not in perfection, but in persistence.”*
 > **This is the way.**
