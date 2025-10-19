@@ -190,16 +190,24 @@ pub fn self_test_dual_unlock(key_path: &str) -> Result<()> {
     let ui = ForgeUI::new()?;
     ui.substep("Running non-invasive dual unlock self-test")?;
 
+    // Create a 128 MiB file-backed vdev (safe and always above ZFS min)
     let vdev = "/tmp/zfstestfile";
     let _ = Command::new("bash")
         .args([
             "-lc",
-            &format!("dd if=/dev/zero of={vdev} bs=1M count=8 status=none"),
+            &format!("dd if=/dev/zero of={vdev} bs=1M count=128 status=none"),
         ])
+        .status()
+        .context("Failed to allocate temporary vdev for testpool")?;
+
+    let _ = Command::new("zpool")
+        .args(["destroy", "-f", "zfstestpool"])
         .status();
 
     let st = Command::new("zpool")
         .args(["create", "-f", "zfstestpool", vdev])
+        .stderr(Stdio::null())
+        .stdout(Stdio::null())
         .status()?;
     if !st.success() {
         return Err(anyhow!(
