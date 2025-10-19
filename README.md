@@ -169,8 +169,6 @@ MIT — see [LICENSE](LICENSE).
 
 **Angus Jones**
 Technical Account Manager – OT Cybersecurity
-Perth, Western Australia
-GitHub: [x4ngus](https://github.com/x4ngus)
 
 ---
 
