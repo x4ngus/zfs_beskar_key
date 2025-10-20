@@ -2,6 +2,61 @@
 
 ---
 
+## v1.1.0 — For the Modern-Day Bounty Hunter
+**Date:** 2025-10-20  
+**Codename:** *Beskar Forged Edition*
+
+### New Features
+
+**Menu-Driven CLI Experience**
+- Added an interactive terminal interface (`--menu` flag or default with no subcommand).
+- Introduced colourized “space-terminal” banner, gradient lines, and flicker animation.
+- Provides intuitive navigation between key commands:
+  - `ForgeKey`, `Unlock`, `Lock`, `Doctor`, and `Init`.
+- Menu choices map directly to the same CLI command logic for consistency.
+
+**Adaptive UX Layer (`ui.rs`)**
+- Introduced unified `UX` and `Timing` structs for messaging, pacing, and styling.
+- Added adaptive pacing via the `Pace` enum (`Info`, `Critical`, `Error`, `Prompt`, `Verbose`).
+- Supports `--quiet` and future `--verbose` modes.
+- Implemented “terminal flicker” and gradient visuals that automatically disable in quiet mode.
+- Added future debug hooks (`trace()`, `set_verbose()`).
+
+**Config System Refactor**
+- Replaced `Config` with `ConfigFile` for stronger typing and clearer semantics.
+- All submodules now reference `ConfigFile` consistently (`unlock.rs`, `init.rs`, etc.).
+- Automatically generates `/etc/zfs-beskar.toml` if missing.
+
+**Atomic Initialization Workflow**
+- Added `cmd/init.rs` with full start-to-finish sequence:
+  - USB key generation and checksum provisioning.
+  - Config creation and permission hardening.
+  - ZFS key binding and systemd unit installation for auto-unlock.
+
+**ZFS + Command Dispatch Enhancements**
+- `main.rs` now supports both CLI subcommands and interactive menu flow.
+- Unified `dispatch_command()` and `dispatch_menu_choice()` functions ensure shared backend logic.
+- Improved progress messages and consistent “This is the Way” success responses.
+
+---
+
+### Improvements & Fixes
+
+- Fixed `UI::from_env()` dependency by migrating to new `UX` interface.
+- Fixed partial move borrow of `cli` in `main.rs`.
+- Removed redundant re-exports and dead-code warnings in `config.rs` and `ui.rs`.
+- Suppressed compiler warnings for future verbose/debug features.
+- Improved checksum provisioning logic for USB keys.
+- Retained full compatibility with `install_units`, `auto_unlock_flow`, and `doctor` diagnostics.
+
+---
+
+### Developer Notes
+
+- Future `--verbose` flag will enable debug and trace logging via `ui.trace()` and adaptive pacing.
+- All timing and styling logic now centralized; business logic remains clean and testable.
+- Project now ready for **v1.1 release tagging** and **release packaging** with menu-driven UX.
+
 ## v1.0.0 — Production-Stable Release (The Way)
 **Date:** 2025-10-20  
 **Codename:** *Beskar Forged Edition*
