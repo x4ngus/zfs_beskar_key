@@ -1,7 +1,83 @@
-# CHANGELOG
+# ZFS_BESKAR_KEY Changelog
 
-All notable changes to **ZFS_BESKAR_KEY** will be documented in this file.  
-This project adheres to [Semantic Versioning](https://semver.org/).
+---
+
+## v1.0.0 — Production-Stable Release (The Way)
+**Date:** 2025-10-20  
+**Codename:** *Beskar Forged Edition*
+
+This marks the first **major stable release** of `zfs_beskar_key`, hardened and battle-tested for real-world deployments.  
+The project now supports full USB-first auto-unlock for ZFS datasets with a self-validating cryptographic verification layer — ensuring that even in the chaos of reboots and system updates, your pool remains guarded.
+
+### New Features
+- **USB Key Self-Test:**  
+  Added robust logic to verify and sanitize the `/run/beskar/key.hex` contents.  
+  Automatically validates key length (64 hex chars) and reports structured errors if malformed.
+
+- **SHA-256 Integrity Check:**  
+  Introduced cryptographic checksum verification for USB keys.  
+  Each USB key’s raw bytes are hashed and validated against `expected_sha256` in the config.  
+  If missing, the system now **auto-generates and writes** this value to `/etc/zfs-beskar.toml`.
+
+- **Config Auto-Provisioning:**  
+  Automatically creates `/etc/zfs-beskar.toml` with secure permissions and sensible defaults  
+  if missing — eliminating user confusion and bootstrap errors.
+
+- **USB-First, Passphrase Fallback:**  
+  Improved reliability and sequence for auto-unlock flow — USB key preferred, passphrase fallback available  
+  with `systemd-ask-password` integration.
+
+- **Systemd Unit Generator:**  
+  Hardened creation of `beskar-usb.mount` and `beskar-unlock.service` units with  
+  minimal privileges, readonly mounts, and security directives aligned to systemd best practices.
+
+- **End-to-End SelfTest Command:**  
+  New `self-test` command performs a non-destructive simulation of the entire unlock flow,  
+  verifying configuration, ZFS command behavior, and USB validity in one go.
+
+### Improvements
+- Simplified and sanitized USB key parsing logic (`is_ascii_hexdigit`-filtered read).  
+- Removed redundant references to deprecated ForgeUI and CmdOutput structs.  
+- Improved stdout consistency and readability for JSON vs TTY modes.  
+- Default timeouts now enforce a sane floor of 10 seconds for cryptographic operations.  
+- Clearer, lore-consistent CLI messages (“This is the Way.” when operations succeed).  
+- Added robust permission handling for config file creation (`chmod 600`).
+
+### Removed / Deprecated
+- Old raw `read()`-based USB reader removed — replaced with UTF-8 safe canonical reader.  
+- Removed unused imports and redundant checksum paths.  
+- Eliminated all private method calls in `ui.rs` and unreferenced helpers.
+
+### Technical Notes
+- Built and tested on Ubuntu with `/usr/sbin/zfs` binary.  
+- ZFS operations run through `Cmd` abstraction layer for security and auditability.  
+- Compatible with systemd environments — ideal for headless boot unlock on encrypted systems.  
+- Written in Rust 1.80+ with zero unsafe code.
+
+---
+
+### Upgrade Notes
+- If upgrading from an earlier prototype version:
+  1. Delete any malformed `/run/beskar/key.hex` files.
+  2. Regenerate your USB key using:
+     ```bash
+     openssl rand -hex 32 | sudo tee /run/beskar/key.hex
+     sudo chmod 600 /run/beskar/key.hex
+     ```
+  3. Run once:
+     ```bash
+     sudo /usr/local/bin/zfs_beskar_key auto-unlock --config=/etc/zfs-beskar.toml
+     ```
+     This will generate and record the expected SHA-256 automatically.
+  4. Verify integrity with:
+     ```bash
+     sudo /usr/local/bin/zfs_beskar_key self-test
+     ```
+
+---
+
+**“This is the Way.”**  
+— v1.0.0: Beskar Forged and Battle-Ready.
 
 ---
 
