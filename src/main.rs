@@ -1,78 +1,166 @@
+// ============================================================================
+// src/main.rs – CLI entry
+// ============================================================================
+
+mod cmd;
+mod config;
 mod ui;
-mod usb;
 mod zfs;
-mod dracut;
 
-use anyhow::{Context, Result};
-use ui::ForgeUI;
+use anyhow::{anyhow, Result};
+use clap::{Parser, Subcommand};
+use rand::rngs::OsRng;
+use rand::RngCore;
+use std::time::Duration;
+use ui::UI;
+use zeroize::Zeroizing;
 
-const POOL: &str = "rpool";
-const USB_LABEL: &str = "BESKARKEY";
-const KEY_DIR: &str = "/etc/zfs/keys";
-const KEY_NAME: &str = "holocron.key";
-const KEY_PATH: &str = "/etc/zfs/keys/holocron.key";
+#[derive(Parser, Debug)]
+#[command(
+    name = "zfs_beskar_key",
+    version,
+    about = "Tasteful Mandalorian-flavoured ZFS key tool"
+)]
+struct Cli {
+    /// Path to config file (TOML or YAML)
+    #[arg(short, long)]
+    config: Option<String>,
+
+    /// Dataset target when relevant (e.g., rpool/ROOT)
+    #[arg(short = 'd', long)]
+    dataset: Option<String>,
+
+    /// JSON logs / quiet handled by BESKAR_UI env; this flag forces JSON.
+    #[arg(long)]
+    json: bool,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Generate a 32-byte key and print as hex to stdout
+    ForgeKey,
+
+    /// Attach/load a key to an encrypted dataset (reads key from stdin if not provided)
+    Unlock {
+        /// Key in hex; if omitted, read from stdin
+        #[arg(long)]
+        key_hex: Option<String>,
+    },
+
+    /// Unload key for dataset
+    Lock,
+
+    /// Preflight checks
+    Doctor,
+}
 
 fn main() -> Result<()> {
-    let mut ui = ForgeUI::new()?;
+    // --- Setup --------------------------------------------------------------
+    let cli = Cli::parse();
 
-    // Opening cinematic
-    ui.banner(r#"ZFS USB SECURITY KEY — "This is the Way.""#)?;
-    ui.blast(900)?;
-    ui.step("Initializing the forge — verifying your environment")?;
-    ui.blaster(5, "Checking tools and pool integrity")?;
-    zfs::preflight(POOL)
-        .context("Preflight check failed: required tool or pool missing")?;
-    ui.pause(1);
+    if cli.json {
+        std::env::set_var("BESKAR_UI", "json");
+    }
+    let ui = UI::from_env();
 
-    // Step 1: Generate/attach key (keep passphrase fallback)
-    ui.step("Forging the beskar ingot — generating your encryption key")?;
-    ui.blaster(15, "Creating raw key material & attaching to rpool")?;
-    zfs::ensure_raw_key(KEY_DIR, KEY_PATH, POOL)
-        .context("Failed to attach raw key to rpool")?;
-    // Keep passphrase fallback explicit for safety.
-    zfs::set_prop(POOL, "keylocation", "prompt")
-        .context("Failed to set keylocation=prompt on rpool")?;
-    ui.pause(1);
+    // Borrow config path immutably (no move from `cli`).
+    let cfg = if let Some(p) = &cli.config {
+        Some(config::Config::load(p)?)
+    } else {
+        None
+    };
 
-    // Step 2: USB selection & copy
-    ui.step("Tempering the forge — choose your USB courier")?;
-    ui.blaster(30, "Enumerating removable devices")?;
-    let dev = usb::select_usb_partition().context("USB selection failed")?;
-    ui.pause(1);
+    let timeout = Duration::from_secs(cfg.as_ref().map(|c| c.crypto.timeout_secs).unwrap_or(10));
 
-    ui.step("Binding the clans — format USB and seal the key")?;
-    ui.blaster(45, "Formatting ext4, labeling as BESKARKEY, copying key")?;
-    usb::format_and_copy_key(&dev, USB_LABEL, KEY_PATH, KEY_NAME)
-        .context("Failed to format/copy key to USB")?;
-    ui.pause(1);
+    // Prepare ZFS handle (policy path or discover), no moves from `cli`.
+    let zfs = if let Some(cfg) = &cfg {
+        if let Some(path) = &cfg.policy.zfs_path {
+            zfs::Zfs::with_path(path, timeout)?
+        } else {
+            zfs::Zfs::discover(timeout)?
+        }
+    } else {
+        zfs::Zfs::discover(timeout)?
+    };
 
-    // Step 3: Unify child datasets
-    ui.step("Engraving sigils — unifying all dataset keys")?;
-    ui.blaster(60, "Binding encryption roots to rpool")?;
-    zfs::force_converge_children(POOL)
-        .context("Datasets still independent after inheritance pass")?;
-    ui.pause(1);
+    // 🔒 KEY FIX: Snapshot dataset option BEFORE matching on cli.command.
+    // After this point, we never borrow `&cli` again.
+    let dataset_opt: Option<String> = cli.dataset.clone();
 
-    // Step 4: Install Dracut hook & rebuild initramfs
-    ui.step("Etching runes — integrating Dracut hook for autounlock")?;
-    ui.blaster(75, "Installing module and rebuilding initramfs")?;
-    dracut::install_hook(USB_LABEL, KEY_NAME)
-        .context("Failed to install Dracut hook/module")?;
-    dracut::rebuild_and_verify()
-        .context("Initramfs rebuild/verification failed")?;
-    ui.pause(1);
+    // --- Command dispatch ---------------------------------------------------
+    match cli.command {
+        Commands::ForgeKey => {
+            let mut key = Zeroizing::new([0u8; 32]);
+            OsRng.fill_bytes(&mut *key);
+            println!("{}", hex::encode(*key));
+            ui.finish("Key forged. This is the Way.")?;
+        }
 
-    // Step 5: **Deterministic** self-test inside rpool
-    ui.step("Testing the forge — verifying keyfile and passphrase")?;
-    ui.blaster(90, "Validating key operations in a temporary dataset")?;
-    zfs::self_test_dual_unlock(KEY_PATH, POOL)
-        .context("Self-test failed (keyfile or passphrase validation)")?;
-    ui.pause(1);
+        Commands::Unlock { key_hex } => {
+            let dataset = resolve_dataset(dataset_opt.clone(), &cfg)?;
+            ui.info(&format!("Forging bond with {}…", dataset))?;
 
-    // Completion
-    ui.blaster(100, "Final inspection — armor complete")?;
-    ui.done("ZFS USB autounlock configured successfully!")?;
-    ui.quote()?;
-    ui.close()?;
+            if zfs.is_unlocked(&dataset)? {
+                ui.info("Already unlocked; no action taken.")?;
+                ui.finish("The vault is open.")?;
+                return Ok(());
+            }
+
+            let key_bytes = match key_hex {
+                Some(h) => Zeroizing::new(hex::decode(h.trim())?),
+                None => {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    std::io::stdin().read_to_string(&mut buf)?;
+                    Zeroizing::new(hex::decode(buf.trim())?)
+                }
+            };
+
+            zfs.load_key(&dataset, &key_bytes)?;
+            ui.finish("Key accepted. This is the Way.")?;
+        }
+
+        Commands::Lock => {
+            let dataset = resolve_dataset(dataset_opt.clone(), &cfg)?;
+            zfs.unload_key(&dataset)?;
+            ui.finish("Vault sealed.")?;
+        }
+
+        Commands::Doctor => {
+            let dataset = resolve_dataset(dataset_opt.clone(), &cfg)
+                .unwrap_or_else(|_| String::from("rpool"));
+            let enc = zfs.is_encrypted(&dataset).unwrap_or(false);
+            let unlocked = zfs.is_unlocked(&dataset).unwrap_or(false);
+            ui.warn("Warning test (forging resilience check)")?;
+            ui.heartbeat("doctor", Duration::from_secs(1))?;
+            ui.blaster(25, "Doctor progress test")?;
+            ui.info(&format!(
+                "dataset: {} | encrypted: {} | unlocked: {}",
+                dataset, enc, unlocked
+            ))?;
+            ui.error("Error test (diagnostic only)")?;
+            ui.finish("Diagnostics complete.")?;
+        }
+    }
+
     Ok(())
+}
+
+// Resolve dataset from a pre-snapshotted Option<String> and config.
+// This avoids borrowing `&cli` after `cli.command` has been moved.
+fn resolve_dataset(dataset_opt: Option<String>, cfg: &Option<config::Config>) -> Result<String> {
+    if let Some(d) = dataset_opt {
+        return Ok(d);
+    }
+    if let Some(cfg) = cfg {
+        if let Some(d) = cfg.policy.datasets.first() {
+            return Ok(d.clone());
+        }
+    }
+    Err(anyhow!(
+        "dataset not specified; use --dataset or config.policy.datasets[0]"
+    ))
 }
