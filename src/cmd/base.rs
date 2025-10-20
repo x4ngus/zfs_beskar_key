@@ -28,10 +28,40 @@ impl Cmd {
         let path_str = path.into();
         // Security measure: restrict to known binaries
         let allowed = [
+            // zfs binary locations (must stay in sync with zfs::Zfs::discover)
             "/sbin/zfs",
+            "/usr/sbin/zfs",
+            "/usr/local/sbin/zfs",
+            "/bin/zfs",
+            // systemctl is typically in /bin or /usr/bin
             "/bin/systemctl",
+            "/usr/bin/systemctl",
+            // zpool helper binaries in common locations
+            "/sbin/zpool",
             "/usr/sbin/zpool",
+            "/usr/local/sbin/zpool",
+            // dracut (optional bootstrap step)
             "/usr/bin/dracut",
+            "/usr/sbin/dracut",
+            // block device provisioning utilities for init workflow
+            "/sbin/parted",
+            "/usr/sbin/parted",
+            "/usr/bin/parted",
+            "/sbin/mkfs.ext4",
+            "/usr/sbin/mkfs.ext4",
+            "/usr/bin/mkfs.ext4",
+            "/sbin/blkid",
+            "/usr/sbin/blkid",
+            "/usr/bin/blkid",
+            "/bin/mount",
+            "/usr/bin/mount",
+            "/bin/umount",
+            "/usr/bin/umount",
+            "/bin/lsblk",
+            "/usr/bin/lsblk",
+            "/sbin/udevadm",
+            "/usr/sbin/udevadm",
+            "/usr/bin/udevadm",
         ];
         if !allowed.contains(&path_str.as_str()) {
             return Err(anyhow!("Command '{}' not in allowlist", path_str));
@@ -97,6 +127,29 @@ impl Cmd {
                     thread::sleep(std::time::Duration::from_millis(100));
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cmd;
+    use std::time::Duration;
+
+    #[test]
+    fn zfs_discover_paths_are_allowlisted() {
+        let zfs_paths = [
+            "/sbin/zfs",
+            "/usr/sbin/zfs",
+            "/usr/local/sbin/zfs",
+            "/bin/zfs",
+        ];
+
+        for path in zfs_paths {
+            assert!(
+                Cmd::new_allowlisted(path, Duration::from_secs(1)).is_ok(),
+                "expected {path} to be allowlisted"
+            );
         }
     }
 }

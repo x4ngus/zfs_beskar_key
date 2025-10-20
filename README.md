@@ -30,6 +30,7 @@ All logic is self-contained and can automatically install its own systemd units 
 - Optional fallback to your existing ZFS passphrase using `systemd-ask-password`.  
 - JSON or quiet modes for integration with provisioning tools.  
 - Self-installing systemd units (`beskar-usb.mount` and `beskar-unlock.service`).  
+- An Armorer-guided interactive menu (`--menu`) that wraps every command in the full Beskar narrative.
 
 If the USB key is missing or corrupted, **ZFS_BESKAR_KEY** gracefully falls back to your passphrase prompt.  
 This ensures **you never end up locked out of your filesystem again.**
@@ -37,6 +38,16 @@ This ensures **you never end up locked out of your filesystem again.**
 ---
 
 ## 🚀 Quick Start
+
+### 0. Summon the Forge (optional)
+
+Prefer a guided experience? Launch the interactive console and let the Armorer walk you through each task:
+
+```bash
+sudo /usr/local/bin/zfs_beskar_key --menu
+```
+
+This menu surfaces the same commands as the CLI (`init`, `unlock`, `doctor`, etc.) but wrapped in the full Beskar narrative UX.
 
 ### 1. Clone & Build
 
@@ -56,10 +67,10 @@ curl -fsSL https://raw.githubusercontent.com/x4ngus/zfs_beskar_key/main/scripts/
 
 This script will:
 
-1. Detect and format a USB drive labeled BESKARKEY.
-2. Generate a 32-byte ZFS key using zfs_beskar_key forge-key.
-3. Write /etc/zfs-beskar.toml with secure defaults.
-4. Install and enable beskar-usb.mount and beskar-unlock.service.
+1. Detect removable disks and confirm the target before formatting.  
+2. Weld a single ext4 partition labeled `BESKARKEY`, then forge a dataset-specific key file (for example `rpool_root.keyhex`).  
+3. Hash the forged key (SHA-256), inscribe `/etc/zfs-beskar.toml`, and journal a timestamped backup if the file already exists.  
+4. Install and enable `beskar-usb.mount` and `beskar-unlock.service` through the hardened installer built into the Rust CLI.
 > Tip: You can inspect or edit the scripts/bootstrap.sh script before running — it’s fully commented and self-documenting.
 
 ### 3. Manual Setup (Optional)
@@ -78,6 +89,20 @@ sudo mount /dev/disk/by-label/BESKARKEY /mnt/beskar
 sudo chmod 0400 /mnt/beskar/rpool.keyhex
 sudo umount /mnt/beskar
 ```
+
+> Adjust the filename (`rpool.keyhex`) if your dataset name differs; matching the dataset keeps the forge logs tidy.
+
+After forging the key, run:
+
+```bash
+sudo /usr/local/bin/zfs_beskar_key init --dataset=rpool/ROOT
+```
+
+The init workflow now:
+
+- Creates a timestamped backup if `/etc/zfs-beskar.toml` already exists.  
+- Updates the dataset list, key path, and checksum without disturbing other manual edits.  
+- Installs the dracut hooks and systemd units needed for unattended unlock.
 
 ---
 
@@ -111,6 +136,14 @@ sudo rm /etc/systemd/system/beskar-{usb.mount,unlock.service}
 sudo systemctl daemon-reload
 ```
 >Tip: Re-run install-units any time you change your dataset, USB device, or configuration file. The command is safe and idempotent.
+
+---
+
+## Day-Two Safety Routines
+
+- Re-running `zfs_beskar_key init` now creates a `.bak-<timestamp>` copy of your existing `/etc/zfs-beskar.toml`, updates only the required forge fields, and preserves any custom tuning.  
+- The bootstrap script uses the same logic, so rebuilding a USB token never leaves your system without a valid config.  
+- Keys forged through the CLI are hashed and recorded automatically, letting the doctor/self-test commands confirm authenticity at any time.
 
 ---
 

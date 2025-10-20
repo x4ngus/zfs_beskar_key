@@ -166,18 +166,15 @@ fn dispatch_command(
 
         Commands::Lock => {
             let dataset = resolve_dataset(&cli.dataset, cfg)?;
-            let timeout = Duration::from_secs(if cfg.crypto.timeout_secs > 0 {
-                cfg.crypto.timeout_secs
-            } else {
-                10
-            });
+            let timeout = Duration::from_secs(cfg.crypto.timeout_secs.max(1));
             let zfs = if let Some(path) = &cfg.policy.zfs_path {
                 zfs::Zfs::with_path(path, timeout)?
             } else {
                 zfs::Zfs::discover(timeout)?
             };
-            zfs.unload_key(&dataset)?;
-            ui.success("Vault sealed.");
+            let enc_root = determine_encryption_root(&zfs, &dataset, ui);
+            zfs.unload_key(&enc_root)?;
+            ui.success(&format!("Vault sealed for {}.", enc_root));
             timing.pace(Pace::Critical);
         }
 
@@ -257,8 +254,9 @@ fn dispatch_menu_choice(
             } else {
                 zfs::Zfs::discover(timeout)?
             };
-            zfs.unload_key(&dataset)?;
-            ui.success("Vault sealed.");
+            let enc_root = determine_encryption_root(&zfs, &dataset, ui);
+            zfs.unload_key(&enc_root)?;
+            ui.success(&format!("Vault sealed for {}.", enc_root));
             timing.pace(Pace::Critical);
         }
         menu::MenuChoice::Status => {
@@ -304,7 +302,50 @@ fn resolve_dataset(dataset_opt: &Option<String>, cfg: &ConfigFile) -> Result<Str
     }
 }
 
-// Auto-unlock (unchanged logic)
+fn determine_encryption_root(zfs: &impl ZfsCryptoOps, dataset: &str, ui: &UX) -> String {
+    match zfs.encryption_root(dataset) {
+        Ok(root) => {
+            if root != dataset {
+                ui.info(&format!(
+                    "Dataset {} inherits encryption from root {}.",
+                    dataset, root
+                ));
+            } else {
+                ui.info(&format!("Encryption root identified as {}.", root));
+            }
+            root
+        }
+        Err(e) => {
+            ui.warn(&format!(
+                "Unable to determine encryption root for {}: {}. Using dataset directly.",
+                dataset, e
+            ));
+            dataset.to_string()
+        }
+    }
+}
+
+trait ZfsCryptoOps {
+    fn is_unlocked(&self, dataset: &str) -> Result<bool>;
+    fn encryption_root(&self, dataset: &str) -> Result<String>;
+    fn load_key(&self, dataset: &str, key: &[u8]) -> Result<()>;
+}
+
+impl ZfsCryptoOps for zfs::Zfs {
+    fn is_unlocked(&self, dataset: &str) -> Result<bool> {
+        zfs::Zfs::is_unlocked(self, dataset)
+    }
+
+    fn encryption_root(&self, dataset: &str) -> Result<String> {
+        zfs::Zfs::encryption_root(self, dataset)
+    }
+
+    fn load_key(&self, dataset: &str, key: &[u8]) -> Result<()> {
+        zfs::Zfs::load_key(self, dataset, key)
+    }
+}
+
+// Auto-unlock flow
 fn auto_unlock_flow(ui: &UX, cfg: &ConfigFile, dataset: &str) -> Result<()> {
     ui.info(&format!("Auto-unlock sequence for {}…", dataset));
 
@@ -315,9 +356,32 @@ fn auto_unlock_flow(ui: &UX, cfg: &ConfigFile, dataset: &str) -> Result<()> {
         zfs::Zfs::discover(timeout)?
     };
 
-    let unlocked = zfs.is_unlocked(dataset).unwrap_or(false);
+    auto_unlock_with(&zfs, ui, cfg, dataset)
+}
+
+fn auto_unlock_with(
+    zfs: &impl ZfsCryptoOps,
+    ui: &UX,
+    cfg: &ConfigFile,
+    dataset: &str,
+) -> Result<()> {
+    let enc_root = determine_encryption_root(zfs, dataset, ui);
+
+    let unlocked = match zfs.is_unlocked(&enc_root) {
+        Ok(state) => state,
+        Err(e) => {
+            ui.warn(&format!(
+                "Unable to determine current keystatus for {}: {}. Assuming locked.",
+                enc_root, e
+            ));
+            false
+        }
+    };
     if unlocked {
-        ui.info("Dataset already unlocked. Running USB key self-test…");
+        ui.info(&format!(
+            "Encryption root {} already unlocked. Running USB key self-test…",
+            enc_root
+        ));
     }
 
     let usb_path = &cfg.usb.key_hex_path;
@@ -359,9 +423,15 @@ fn auto_unlock_flow(ui: &UX, cfg: &ConfigFile, dataset: &str) -> Result<()> {
     }
 
     if !unlocked {
-        ui.info("Attempting unlock using verified USB key…");
-        zfs.load_key(dataset, &raw_key_bytes)?;
-        ui.success("Key accepted from USB. This is the Way.");
+        ui.info(&format!(
+            "Attempting unlock of encryption root {} using verified USB key…",
+            enc_root
+        ));
+        zfs.load_key(&enc_root, &raw_key_bytes)?;
+        ui.success(&format!(
+            "Key accepted from USB. {} unlocked. This is the Way.",
+            enc_root
+        ));
     } else {
         ui.success("Self-test complete: USB key valid and verified.");
     }
@@ -464,4 +534,97 @@ fn get_usb_uuid(_key_path: &str) -> Result<String> {
         }
     }
     Err(anyhow!("could not detect BESKARKEY UUID"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ConfigFile, CryptoCfg, Fallback, Policy, Usb};
+    use anyhow::Result;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use tempfile::NamedTempFile;
+
+    #[derive(Default)]
+    struct MockZfs {
+        root: String,
+        unlocked: bool,
+        load_calls: Mutex<Vec<String>>,
+        is_unlocked_calls: Mutex<Vec<String>>,
+        encryption_queries: Mutex<Vec<String>>,
+    }
+
+    impl MockZfs {
+        fn new(root: &str, unlocked: bool) -> Self {
+            Self {
+                root: root.to_string(),
+                unlocked,
+                load_calls: Mutex::new(Vec::new()),
+                is_unlocked_calls: Mutex::new(Vec::new()),
+                encryption_queries: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ZfsCryptoOps for MockZfs {
+        fn is_unlocked(&self, dataset: &str) -> Result<bool> {
+            self.is_unlocked_calls
+                .lock()
+                .unwrap()
+                .push(dataset.to_string());
+            Ok(self.unlocked)
+        }
+
+        fn encryption_root(&self, dataset: &str) -> Result<String> {
+            self.encryption_queries
+                .lock()
+                .unwrap()
+                .push(dataset.to_string());
+            Ok(self.root.clone())
+        }
+
+        fn load_key(&self, dataset: &str, _key: &[u8]) -> Result<()> {
+            self.load_calls.lock().unwrap().push(dataset.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn auto_unlock_targets_encryption_root_when_dataset_inherits() -> Result<()> {
+        let mut key_file = NamedTempFile::new()?;
+        let hex_key = "ab".repeat(32);
+        writeln!(key_file, "{hex_key}")?;
+
+        let cfg = ConfigFile {
+            policy: Policy {
+                datasets: vec!["rpool/ROOT/ubuntu".into()],
+                zfs_path: None,
+                allow_root: false,
+            },
+            crypto: CryptoCfg { timeout_secs: 5 },
+            usb: Usb {
+                key_hex_path: key_file.path().to_string_lossy().into_owned(),
+                expected_sha256: None,
+            },
+            fallback: Fallback::default(),
+            path: PathBuf::from("/tmp/test-config"),
+        };
+
+        let ui = UX::new(false, false);
+        let mock = MockZfs::new("rpool/ROOT", false);
+
+        auto_unlock_with(&mock, &ui, &cfg, "rpool/ROOT/ubuntu")?;
+
+        let load_calls = mock.load_calls.lock().unwrap().clone();
+        assert_eq!(load_calls, vec!["rpool/ROOT"]);
+
+        let is_calls = mock.is_unlocked_calls.lock().unwrap().clone();
+        assert_eq!(is_calls, vec!["rpool/ROOT"]);
+
+        let queries = mock.encryption_queries.lock().unwrap().clone();
+        assert_eq!(queries, vec!["rpool/ROOT/ubuntu"]);
+
+        Ok(())
+    }
 }

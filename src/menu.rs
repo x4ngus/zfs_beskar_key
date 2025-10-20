@@ -52,16 +52,16 @@ pub fn show_main_menu(ui: &UX, timing: &Timing) -> Option<MenuChoice> {
     // Menu items
     // ------------------------------------------------------------------------
     let options = vec![
-        "Initialize new USB Key  [Secure Setup]",
-        "Unlock ZFS Pool         [USB-First]",
-        "Lock ZFS Pool           [Manual]",
-        "System Status           [Diagnostics]",
-        "Doctor                  [Repair & Verify]",
-        "Exit Terminal",
+        "Temper Beskar Key       [Forge USB token]",
+        "Unseal the Vault        [USB-first unlock]",
+        "Reseal the Vault        [Lock dataset]",
+        "Clan Status Scan        [Diagnostics]",
+        "Summon the Armorer      [Doctor checks]",
+        "Leave the Covert",
     ];
 
     let selection = Select::with_theme(&theme)
-        .with_prompt("Select Operation")
+        .with_prompt("Choose your next forge action")
         .items(&options)
         .default(0)
         .interact()
@@ -76,7 +76,10 @@ pub fn show_main_menu(ui: &UX, timing: &Timing) -> Option<MenuChoice> {
         _ => MenuChoice::Quit,
     };
 
-    ui.info(&format!("Command accepted: {}", options[selection]));
+    ui.info(&format!(
+        "Operation queued: {} // The Armorer nods.",
+        options[selection]
+    ));
     timing.pace(Pace::Prompt);
     Some(choice)
 }

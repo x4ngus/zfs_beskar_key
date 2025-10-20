@@ -1,120 +1,109 @@
 #!/usr/bin/env bash
-#
-# =============================================================================
-#  ZFS_BESKAR_KEY Bootstrap Installer – v1.1
-#  For the modern-day Bounty Hunter.
-#
-#  This script forges your first Beskar key token, configuration,
-#  and systemd integration for auto-unlock of encrypted ZFS pools.
-#
-#  Run as root:
-#    curl -fsSL https://raw.githubusercontent.com/x4ngus/zfs_beskar_key/main/scripts/bootstrap.sh | sudo bash
-# =============================================================================
+# Minimal bootstrapper for zfs_beskar_key.
+# Formats a USB token, forges the key, writes config, and installs systemd units.
 
 set -euo pipefail
 
-BESKAR_LABEL="BESKARKEY"
-CONFIG_PATH="/etc/zfs-beskar.toml"
-MOUNT_DIR="/mnt/beskar"
-RUN_DIR="/run/beskar"
-BINARY="/usr/local/bin/zfs_beskar_key"
-KEY_NAME="rpool.keyhex"
-PART_NAME="BESKAR_PART"
+readonly BESKAR_LABEL="${BESKAR_LABEL:-BESKARKEY}"
+readonly CONFIG_PATH="${CONFIG_PATH:-/etc/zfs-beskar.toml}"
+readonly MOUNT_DIR="${MOUNT_DIR:-/mnt/beskar}"
+readonly RUN_DIR="${RUN_DIR:-/run/beskar}"
+readonly BINARY="${BINARY:-/usr/local/bin/zfs_beskar_key}"
 
-# -----------------------------------------------------------------------------
-# Banner
-# -----------------------------------------------------------------------------
-clear
-echo
-echo "═══════════════════════════════════════════════════════════════════════"
-echo "  BESKAR FORGE SEQUENCE – v1.1"
-echo "  For the modern-day Bounty Hunter."
-echo "═══════════════════════════════════════════════════════════════════════"
-echo
-
-# -----------------------------------------------------------------------------
-# 1. Environment validation
-# -----------------------------------------------------------------------------
-echo "[1/6] Checking environment integrity..."
-
-if [[ $EUID -ne 0 ]]; then
-    echo "⛔ This script must be executed as root."
-    exit 1
-fi
-
-for cmd in parted mkfs.ext4 blkid lsblk; do
-    if ! command -v "$cmd" &>/dev/null; then
-        echo "⛔ Required utility missing: $cmd"
-        exit 1
+cleanup() {
+    if mountpoint -q "$MOUNT_DIR"; then
+        umount "$MOUNT_DIR" || true
     fi
+}
+trap cleanup EXIT
+
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+require_cmd() {
+    local cmd=$1
+    command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
+}
+
+echo "Beskar bootstrap starting..."
+
+[[ $EUID -eq 0 ]] || die "Run this script as root."
+[[ -x $BINARY ]] || die "$BINARY not found. Install zfs_beskar_key first."
+
+for cmd in lsblk blkid parted mkfs.ext4 sha256sum udevadm wipefs; do
+    require_cmd "$cmd"
 done
 
-if [[ ! -x "$BINARY" ]]; then
-    echo "⛔ $BINARY not found or not executable."
-    echo "   Build and install it first via: cargo build --release && sudo cp target/release/zfs_beskar_key $BINARY"
-    exit 1
-fi
-
-echo "✅ Environment verified — forge is ready."
-echo
-
-# -----------------------------------------------------------------------------
-# 2. Select and verify USB target
-# -----------------------------------------------------------------------------
-echo "[2/6] Scanning for removable drives..."
-lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,LABEL | grep -E "disk|part" || true
-
-read -rp "Enter the device path for your USB (e.g., /dev/sdb): " DEVICE
-if [[ -z "$DEVICE" || ! -b "$DEVICE" ]]; then
-    echo "⛔ Invalid device specified."
-    exit 1
-fi
+mkdir -p "$MOUNT_DIR" "$RUN_DIR"
 
 echo
-read -rp "⚠️  This will ERASE all data on $DEVICE. Proceed? (y/N): " CONFIRM
-[[ "${CONFIRM,,}" == "y" ]] || exit 1
+echo "Removable devices:"
+lsblk -rpo NAME,TYPE,RM,SIZE,MODEL |
+    awk '$2 == "disk" { rm = ($3 == "1") ? "yes" : "no"; printf "  %s  %s  removable=%s  %s\n", $1, $4, rm, $5 }'
 
-# -----------------------------------------------------------------------------
-# 3. Format and prepare USB token
-# -----------------------------------------------------------------------------
+read -rp "USB device to format (e.g. /dev/sdb): " DEVICE
+[[ -n ${DEVICE:-} && -b $DEVICE ]] || die "Invalid block device: $DEVICE"
+
 echo
-echo "[3/6] Forging storage medium..."
-umount "${DEVICE}"* 2>/dev/null || true
+read -rp "This will erase all data on $DEVICE. Continue? [y/N]: " confirm
+[[ ${confirm,,} == "y" ]] || die "Aborted by user."
+
+# Avoid accidental root disk wipe
+mounted_parts=$(lsblk -nrpo NAME,MOUNTPOINT "$DEVICE" | awk '$2 != "" {print $1" -> "$2}')
+[[ -z ${mounted_parts:-} ]] || die "Device has mounted partitions: $mounted_parts"
+
+echo "Creating single ext4 partition labeled $BESKAR_LABEL..."
+wipefs -a "$DEVICE" >/dev/null 2>&1 || true
 parted -s "$DEVICE" mklabel gpt
-parted -s "$DEVICE" mkpart "$PART_NAME" ext4 1MiB 100%
-sleep 1
-mkfs.ext4 -F -L "$BESKAR_LABEL" "${DEVICE}1" >/dev/null
-echo "✅ Medium aligned and labeled as $BESKAR_LABEL."
-echo
+parted -s "$DEVICE" mkpart primary ext4 1MiB 100%
+udevadm settle
 
-# -----------------------------------------------------------------------------
-# 4. Forge and store encryption key
-# -----------------------------------------------------------------------------
-echo "[4/6] Forging encryption key..."
-mkdir -p "$MOUNT_DIR"
-mount "/dev/disk/by-label/$BESKAR_LABEL" "$MOUNT_DIR"
+PARTITION=$(lsblk -prno NAME,TYPE "$DEVICE" | awk '$2=="part"{print $1; exit}')
+[[ -n $PARTITION ]] || die "Failed to detect new partition on $DEVICE"
 
-# Use new command structure: ForgeKey -> key file output
-"$BINARY" forge-key | tee "$MOUNT_DIR/$KEY_NAME" >/dev/null
-chmod 0400 "$MOUNT_DIR/$KEY_NAME"
+mkfs.ext4 -F -L "$BESKAR_LABEL" "$PARTITION" >/dev/null
+udevadm settle
+
+mount "$PARTITION" "$MOUNT_DIR"
+
+read -rp "Dataset to unlock [rpool/ROOT]: " DATASET_INPUT
+DATASET=${DATASET_INPUT:-rpool/ROOT}
+[[ -n $DATASET ]] || die "Dataset name must not be empty."
+
+KEY_BASENAME=$(echo "$DATASET" | tr '/[:space:]' '_' | tr '[:upper:]' '[:lower:]')
+KEY_NAME="${KEY_BASENAME}.keyhex"
+KEY_PATH="$MOUNT_DIR/$KEY_NAME"
+
+echo "Forging key material..."
+KEY_HEX=$("$BINARY" forge-key | head -n 1 | tr -d '[:space:]')
+[[ ${#KEY_HEX} -eq 64 && $KEY_HEX =~ ^[0-9a-fA-F]+$ ]] || die "Unexpected forge-key output."
+
+printf '%s\n' "$KEY_HEX" >"$KEY_PATH"
+chmod 0400 "$KEY_PATH"
 sync
+USB_SHA=$(sha256sum "$KEY_PATH" | awk '{print $1}')
+
 umount "$MOUNT_DIR"
 
-# Detect UUID for systemd mount unit
-USB_UUID=$(blkid -s UUID -o value "${DEVICE}1" || true)
-echo "✅ Key forged and stored on USB token ($USB_UUID)."
+USB_UUID=$(blkid -s UUID -o value "$PARTITION" || true)
+[[ -n $USB_UUID ]] || die "Unable to determine USB UUID for $PARTITION"
+
+ZFS_BIN=$(command -v zfs || echo "/sbin/zfs")
+
 echo
-
-# -----------------------------------------------------------------------------
-# 5. Write configuration file (v1.1 layout)
-# -----------------------------------------------------------------------------
-echo "[5/6] Writing configuration to $CONFIG_PATH..."
+echo "Writing config to $CONFIG_PATH..."
+if [[ -f $CONFIG_PATH ]]; then
+    echo "Existing config detected at $CONFIG_PATH."
+    read -rp "Overwrite with new settings? [y/N]: " overwrite
+    [[ ${overwrite,,} == "y" ]] || die "Keeping existing config; aborting to avoid clobbering."
+fi
 mkdir -p "$(dirname "$CONFIG_PATH")"
-
 cat >"$CONFIG_PATH" <<EOF
 [policy]
-datasets = ["rpool/ROOT"]
-zfs_path = "/sbin/zfs"
+datasets = ["$DATASET"]
+zfs_path = "$ZFS_BIN"
 allow_root = true
 
 [crypto]
@@ -122,7 +111,7 @@ timeout_secs = 10
 
 [usb]
 key_hex_path = "$RUN_DIR/$KEY_NAME"
-expected_sha256 = ""
+expected_sha256 = "$USB_SHA"
 
 [fallback]
 enabled = true
@@ -130,38 +119,20 @@ askpass = true
 askpass_path = "/usr/bin/systemd-ask-password"
 EOF
 
-chmod 0600 "$CONFIG_PATH"
-echo "✅ Configuration file written at $CONFIG_PATH."
-echo
+chmod 600 "$CONFIG_PATH"
 
-# -----------------------------------------------------------------------------
-# 6. Initialize Beskar environment (v1.1 workflow)
-# -----------------------------------------------------------------------------
-echo "[6/6] Initializing system and installing units..."
-"$BINARY" init --dataset="rpool/ROOT" --config="$CONFIG_PATH" || {
-    echo "⚠️  Init command failed — you can rerun manually with:"
-    echo "    $BINARY init --dataset=rpool/ROOT --config=$CONFIG_PATH"
-}
+echo "Installing systemd units via zfs_beskar_key..."
+"$BINARY" install-units --config "$CONFIG_PATH" --dataset "$DATASET"
 
 echo
-"$BINARY" doctor --config="$CONFIG_PATH" || true
-echo "✅ System diagnostics completed."
+echo "Bootstrap complete."
+echo "  • USB label : $BESKAR_LABEL"
+echo "  • USB UUID  : $USB_UUID"
+echo "  • Key file  : $RUN_DIR/$KEY_NAME"
+echo "  • Config    : $CONFIG_PATH"
 echo
-
-# -----------------------------------------------------------------------------
-# Epilogue
-# -----------------------------------------------------------------------------
-echo "═══════════════════════════════════════════════════════════════════════"
-echo "🛡️  Beskar key successfully forged and configured."
+echo "Next steps:"
+echo "  - Keep the USB inserted for boot-time unlock."
+echo "  - Optional: run '$BINARY self-test --config $CONFIG_PATH --dataset $DATASET' to verify."
 echo
-echo "    • USB token label : $BESKAR_LABEL"
-echo "    • Config path     : $CONFIG_PATH"
-echo "    • Units installed : beskar-usb.mount / beskar-unlock.service"
-echo "    • USB UUID        : ${USB_UUID:-unknown}"
-echo
-echo "Insert the key and reboot to test automated pool unlock."
-echo "If the token is absent, fallback passphrase protection remains active."
-echo
-echo "This is the Way."
-echo "═══════════════════════════════════════════════════════════════════════"
-echo
+echo "Finished."

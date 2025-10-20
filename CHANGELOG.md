@@ -2,6 +2,34 @@
 
 ---
 
+## v1.2.0 — Tempered Without Force
+**Date:** 2025-10-20  
+**Codename:** *Covert Steward*
+
+### Highlights
+
+- **Resilient `init` flow**  
+  - Automatically detects an existing `/etc/zfs-beskar.toml`, journals a timestamped backup, and refreshes only the Mandalorian-critical fields (dataset, key path, checksum, askpass).  
+  - Eliminates the need for `--force` in day-two operations while guaranteeing the config always reflects the freshly forged USB key.
+
+- **Bootstrap script reforged**  
+  - Simplified prompts for device selection and dataset naming, with defensive checks that prevent mounted disks from being wiped.  
+  - Generates dataset-scoped key filenames, verifies the forged hex, calculates SHA-256 fingerprints, and writes the config using the new resilient logic before installing systemd units.
+
+- **Narrative fully restored**  
+  - `init.rs`, `ui.rs`, and `menu.rs` now echo the creed: forge phases, clan briefings, and Beskar metaphors guide every step so the CLI matches the project’s thematic mission.
+
+- **Documentation refresh**  
+  - README now calls out the interactive menu, recounts the forge workflow, and explains how the tool safeguards existing configs.
+
+### Fixes & Maintenance
+
+- Tightened config normalization to ensure `policy.datasets[0]` always matches the freshly forged target and that `zfs_path` defaults correctly.
+- Added defensive backups with strict 0600 permissions for every config rewrite.
+- Ensured bootstrap-created configs align with the new checksum workflow and recovered narrative tone.
+
+---
+
 ## v1.1.0 — For the Modern-Day Bounty Hunter
 **Date:** 2025-10-20  
 **Codename:** *Beskar Forged Edition*
@@ -203,4 +231,3 @@ The project now supports full USB-first auto-unlock for ZFS datasets with a self
 
 ### Maintainer
 Angus J. — [@x4ngus](https://github.com/x4ngus)
-

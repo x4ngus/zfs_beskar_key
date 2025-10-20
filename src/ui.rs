@@ -1,20 +1,79 @@
 // ============================================================================
-// src/ui.rs – Unified UI layer (messaging, pacing, banner, flicker, gradients)
-// - Adaptive pacing (quiet/verbose aware)
-// - Colorized messages with restrained personality
-// - Flicker intro and subtle gradient accents (disabled in --quiet)
-// - Centralized UX helpers so business logic stays clean
+// src/ui.rs – Mandalorian-inspired CLI experience with security-forward tone
 // ============================================================================
 
 use anyhow::Result;
-use console::{style, Emoji, Style};
+use console::Style;
 use std::{env, io::Write, thread, time::Duration};
+
+const DEFAULT_RULE_WIDTH: usize = 64;
+
+#[derive(Clone)]
+struct Glyphs {
+    info: &'static str,
+    ok: &'static str,
+    warn: &'static str,
+    err: &'static str,
+    security: &'static str,
+    note: &'static str,
+    trace: &'static str,
+}
+
+impl Glyphs {
+    fn default() -> Self {
+        Self {
+            info: "⟢",
+            ok: "⛨",
+            warn: "⚠",
+            err: "✖",
+            security: "🛡",
+            note: "…",
+            trace: "⋆",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Theme {
+    glyphs: Glyphs,
+    info: Style,
+    warn: Style,
+    ok: Style,
+    err: Style,
+    accent: Style,
+    muted: Style,
+    security: Style,
+    banner_edge: Style,
+    banner_fill: Style,
+}
+
+impl Theme {
+    fn default() -> Self {
+        Self {
+            glyphs: Glyphs::default(),
+            info: Style::new().color256(110),
+            warn: Style::new().color256(208).bold(),
+            ok: Style::new().color256(114).bold(),
+            err: Style::new().color256(196).bold(),
+            accent: Style::new().color256(45).bold(),
+            muted: Style::new().color256(244),
+            security: Style::new().color256(39).bold(),
+            banner_edge: Style::new().color256(45).bold(),
+            banner_fill: Style::new().color256(37),
+        }
+    }
+
+    fn rule(&self, width: usize) -> String {
+        let clamped = width.clamp(12, 80);
+        "─".repeat(clamped)
+    }
+}
 
 // --------------------------- Pacing -----------------------------------------
 
 /// Context of a CLI action for adaptive pacing.
 #[derive(Copy, Clone, Debug)]
-#[allow(dead_code)] // keep ahead of compiler nags; future modes will use all variants
+#[allow(dead_code)]
 pub enum Pace {
     /// Major success, completion, or irreversible action — let it breathe.
     Critical,
@@ -42,7 +101,6 @@ pub struct Timing {
 
 impl Timing {
     pub fn new(verbose: bool, quiet: bool) -> Self {
-        // Optional global override
         let base = env::var("BESKAR_UI_DELAY_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -80,7 +138,6 @@ impl Timing {
         thread::sleep(effective);
     }
 
-    /// Explicit duration when needed.
     #[allow(dead_code)]
     pub fn pause_secs(&self, secs: u64) {
         if !self.quiet_mode {
@@ -91,19 +148,11 @@ impl Timing {
 
 // --------------------------- UX Facade --------------------------------------
 
-/// Centralized UI facade for consistent look & feel.
+/// Centralized UX facade for Mandalorian-flavored messaging.
 pub struct UX {
-    #[allow(unused)]
     pub verbose: bool,
-    #[allow(unused)]
     pub quiet: bool,
-    // Pre-baked styles for consistent visuals
-    s_info: Style,
-    s_warn: Style,
-    s_ok: Style,
-    s_err: Style,
-    s_head: Style,
-    s_tag: Style,
+    theme: Theme,
 }
 
 impl UX {
@@ -111,131 +160,199 @@ impl UX {
         Self {
             verbose,
             quiet,
-            s_info: Style::new().blue(),
-            s_warn: Style::new().yellow(),
-            s_ok: Style::new().green(),
-            s_err: Style::new().red().bold(),
-            s_head: Style::new().cyan().bold(),
-            s_tag: Style::new().yellow(),
+            theme: Theme::default(),
         }
     }
 
-    /// Allow dynamic runtime toggling of verbosity
     #[allow(dead_code)]
     pub fn set_verbose(&mut self, enable: bool) {
         self.verbose = enable;
     }
 
-    /// Future feature marker for debug tracing (silences unused warnings now)
     #[allow(dead_code)]
     pub fn trace(&self, msg: &str) {
         if self.verbose && !self.quiet {
-            println!("{} {}", style("[TRACE]").dim(), msg);
+            println!(
+                "{} {}",
+                self.theme.muted.apply_to(self.theme.glyphs.trace),
+                self.theme.muted.apply_to(msg)
+            );
         }
     }
-
-    // ---------------------- Messaging ----------------------
 
     pub fn info(&self, msg: &str) {
         if self.quiet {
             return;
         }
-        println!("{} {}", self.s_info.apply_to("[INFO]"), msg);
+        println!(
+            "{} {}",
+            self.theme.info.apply_to(self.theme.glyphs.info),
+            msg
+        );
     }
 
     pub fn success(&self, msg: &str) {
         if self.quiet {
             return;
         }
-        let check = Emoji("✅", "[OK]");
-        println!("{} {}", check, self.s_ok.apply_to(msg));
+        println!(
+            "{} {}",
+            self.theme.ok.apply_to(self.theme.glyphs.ok),
+            self.theme.ok.apply_to(msg)
+        );
     }
 
     pub fn warn(&self, msg: &str) {
         if self.quiet {
             return;
         }
-        println!("{} {}", Emoji("⚠️", "[WARN]"), self.s_warn.apply_to(msg));
+        println!(
+            "{} {}",
+            self.theme.warn.apply_to(self.theme.glyphs.warn),
+            msg
+        );
     }
 
     pub fn error(&self, msg: &str) {
-        // Errors should be visible even in quiet mode
-        eprintln!("{} {}", Emoji("❌", "[ERR]"), self.s_err.apply_to(msg));
+        eprintln!(
+            "{} {}",
+            self.theme.err.apply_to(self.theme.glyphs.err),
+            self.theme.err.apply_to(msg)
+        );
     }
-    #[allow(dead_code)]
-    pub fn debug(&self, msg: &str) {
-        if self.verbose && !self.quiet {
-            println!("{} {}", style("[DEBUG]").dim(), msg);
+
+    pub fn security(&self, msg: &str) {
+        if self.quiet {
+            return;
         }
+        println!(
+            "{} {}",
+            self.theme.security.apply_to(self.theme.glyphs.security),
+            self.theme.security.apply_to(msg)
+        );
     }
 
-    // ---------------------- Banner & Effects ----------------------
+    pub fn note(&self, msg: &str) {
+        if self.quiet {
+            return;
+        }
+        println!(
+            "{} {}",
+            self.theme.muted.apply_to(self.theme.glyphs.note),
+            self.theme.muted.apply_to(msg)
+        );
+    }
 
-    /// Main banner with subtle “space-terminal” vibe.
+    pub fn phase(&self, title: &str) {
+        if self.quiet {
+            return;
+        }
+        let normalized = title.trim().to_uppercase();
+        println!(
+            "{}",
+            self.theme.accent.apply_to(format!("// {}", normalized))
+        );
+        self.divider();
+    }
+
+    pub fn divider(&self) {
+        if self.quiet {
+            return;
+        }
+        println!(
+            "{}",
+            self.theme
+                .muted
+                .apply_to(self.theme.rule(DEFAULT_RULE_WIDTH))
+        );
+    }
+
+    pub fn data_panel(&self, title: &str, rows: &[(&str, String)]) {
+        if self.quiet {
+            return;
+        }
+        let label_width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+        println!("{}", self.theme.accent.apply_to(format!("// {}", title)));
+        for (label, value) in rows {
+            println!(
+                "{} {:>width$} {} {}",
+                self.theme.muted.apply_to("▸"),
+                label,
+                self.theme.muted.apply_to("::"),
+                value,
+                width = label_width
+            );
+        }
+        println!(
+            "{}",
+            self.theme
+                .muted
+                .apply_to(self.theme.rule(DEFAULT_RULE_WIDTH))
+        );
+    }
+
     pub fn banner(&self) {
         if self.quiet {
             return;
         }
-
-        let border = "══════════════════════════════════════════════════════════════════";
+        const BODY: usize = 58;
+        let border = "═".repeat(BODY + 2);
         println!(
-            "\n{}\n{}\n{}\n{}\n",
-            self.s_head.apply_to(format!("╔{}╗", border)),
-            self.s_head
-                .apply_to("║                ZFS  BESKAR  KEY  CONSOLE                         ║"),
-            self.s_tag
-                .apply_to("║             For the modern-day Bounty Hunter.                    ║"),
-            self.s_head.apply_to(format!("╚{}╝", border)),
+            "{}",
+            self.theme.banner_edge.apply_to(format!("╔{}╗", border))
         );
-        self.gradient_line(":: INITIALIZING SECURE INTERFACE ::");
+
+        let lines = [
+            "BESKAR FORGE TERMINAL",
+            "Armorer's console | Beskar for defense, never attack",
+            "Purpose: Temper encrypted keys into armour for pools",
+            "Creed: Protect the clan. Safeguard the data. This is the Way",
+        ];
+
+        for line in lines {
+            let clipped = line.chars().take(BODY).collect::<String>();
+            println!(
+                "{}",
+                self.theme
+                    .banner_fill
+                    .apply_to(format!("║ {:<width$} ║", clipped, width = BODY))
+            );
+        }
+
+        println!(
+            "{}",
+            self.theme.banner_edge.apply_to(format!("╚{}╝", border))
+        );
+        self.note("Secure channel sealed. The Armorer watches this forge.");
+        self.divider();
     }
 
-    /// Brief flicker effect to suggest a terminal powering up (skipped in quiet).
     pub fn banner_flicker(&self, timing: &Timing) -> Result<()> {
         if self.quiet {
             return Ok(());
         }
+
         let mut out = std::io::stdout();
-        for _ in 0..3 {
+        let sequences = [
+            "Stoking forge coals",
+            "Aligning beskar ingots",
+            "Inscribing the Creed",
+        ];
+
+        for seq in sequences.iter() {
             write!(
                 out,
                 "\r{}",
-                style(":: INITIALIZING INTERFACE ::").green().dim()
+                self.theme.accent.apply_to(format!(":: {} ::", seq))
             )?;
             out.flush()?;
             thread::sleep(Duration::from_millis(140));
-            write!(out, "\r                             ")?; // clear line
+            write!(out, "\r{}", " ".repeat(64))?;
             out.flush()?;
-            thread::sleep(Duration::from_millis(110));
+            thread::sleep(Duration::from_millis(90));
         }
         println!();
         timing.pace(Pace::Prompt);
         Ok(())
-    }
-
-    /// Subtle left-to-right color shift; restrained to avoid noise.
-    pub fn gradient_line(&self, text: &str) {
-        if self.quiet {
-            return;
-        }
-        let segs = 3usize.max(text.len() / 3);
-        let (c1, c2, c3) = (
-            Style::new().cyan(),
-            Style::new().green(),
-            Style::new().yellow(),
-        );
-        let mut out = String::with_capacity(text.len());
-
-        for (i, ch) in text.chars().enumerate() {
-            let styled = if i % segs == 0 {
-                c1.apply_to(ch.to_string()).to_string()
-            } else if i % segs == 1 {
-                c2.apply_to(ch.to_string()).to_string()
-            } else {
-                c3.apply_to(ch.to_string()).to_string()
-            };
-            out.push_str(&styled);
-        }
-        println!("{}", out);
     }
 }
