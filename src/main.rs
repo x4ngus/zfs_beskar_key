@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 #[command(
     name = "zfs_beskar_key",
     version,
-    about = "Tasteful Mandalorian-flavoured ZFS key tool"
+    about = "This is the Way to manage ZFS encrypted dataset keys with USB-first auto-unlock."
 )]
 struct Cli {
     /// Path to config file (TOML or YAML)
