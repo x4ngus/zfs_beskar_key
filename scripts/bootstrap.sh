@@ -125,6 +125,19 @@ echo "Installing systemd units via zfs_beskar_key..."
 "$BINARY" install-units --config "$CONFIG_PATH" --dataset "$DATASET"
 
 echo
+if command -v dracut >/dev/null 2>&1; then
+    read -rp "Run dracut -f now to refresh initramfs with the Beskar module? [y/N]: " rebuild
+    if [[ ${rebuild,,} == "y" ]]; then
+        echo "Rebuilding initramfs via dracut..."
+        dracut -f || die "dracut failed — inspect output above and rerun manually."
+    else
+        echo "Skipping initramfs rebuild. Run 'sudo dracut -f' before rebooting."
+    fi
+else
+    echo "⚠️  dracut binary not found. Install dracut and run 'sudo dracut -f' before reboot."
+fi
+
+echo
 echo "Bootstrap complete."
 echo "  • USB label : $BESKAR_LABEL"
 echo "  • USB UUID  : $USB_UUID"
@@ -133,6 +146,7 @@ echo "  • Config    : $CONFIG_PATH"
 echo
 echo "Next steps:"
 echo "  - Keep the USB inserted for boot-time unlock."
-echo "  - Optional: run '$BINARY self-test --config $CONFIG_PATH --dataset $DATASET' to verify."
+echo "  - Run 'sudo zfs_beskar_key --menu' and choose 'Vault Drill Simulation' to rehearse."
+echo "  - Run '$BINARY self-test --config $CONFIG_PATH --dataset $DATASET' to verify the USB."
 echo
 echo "Finished."

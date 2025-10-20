@@ -22,13 +22,13 @@ struct Glyphs {
 impl Glyphs {
     fn default() -> Self {
         Self {
-            info: "⟢",
+            info: "✶",
             ok: "⛨",
             warn: "⚠",
             err: "✖",
             security: "🛡",
-            note: "…",
-            trace: "⋆",
+            note: "⋄",
+            trace: "⌁",
         }
     }
 }
@@ -64,8 +64,13 @@ impl Theme {
     }
 
     fn rule(&self, width: usize) -> String {
-        let clamped = width.clamp(12, 80);
-        "─".repeat(clamped)
+        let clamped = width.clamp(18, 96);
+        let pattern = ["╼", "─", "╾", "─"];
+        let mut buf = String::with_capacity(clamped * 2);
+        for i in 0..clamped {
+            buf.push_str(pattern[i % pattern.len()]);
+        }
+        buf
     }
 }
 
@@ -250,7 +255,7 @@ impl UX {
         let normalized = title.trim().to_uppercase();
         println!(
             "{}",
-            self.theme.accent.apply_to(format!("// {}", normalized))
+            self.theme.accent.apply_to(format!("╔═ {} ═╗", normalized))
         );
         self.divider();
     }
@@ -272,11 +277,16 @@ impl UX {
             return;
         }
         let label_width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
-        println!("{}", self.theme.accent.apply_to(format!("// {}", title)));
+        println!(
+            "{}",
+            self.theme
+                .accent
+                .apply_to(format!("╟─ {} ─╢", title.to_uppercase()))
+        );
         for (label, value) in rows {
             println!(
                 "{} {:>width$} {} {}",
-                self.theme.muted.apply_to("▸"),
+                self.theme.muted.apply_to("✦"),
                 label,
                 self.theme.muted.apply_to("::"),
                 value,
@@ -302,11 +312,28 @@ impl UX {
             self.theme.banner_edge.apply_to(format!("╔{}╗", border))
         );
 
+        let crest = [
+            "            /\\        /\\        /\\",
+            "           /  \\      /  \\      /  \\",
+            "          / /\\ \\    / /\\ \\    / /\\ \\",
+            "         / ____ \\  / ____ \\  / ____ \\",
+            "        /_/    \\_\\/_/    \\_\\/_/    \\_\\",
+        ];
+
+        for line in crest {
+            let clipped = line.chars().take(BODY).collect::<String>();
+            println!(
+                "{}",
+                self.theme
+                    .banner_fill
+                    .apply_to(format!("║ {:<width$} ║", clipped, width = BODY))
+            );
+        }
+
         let lines = [
-            "BESKAR FORGE TERMINAL",
-            "Armorer's console | Beskar for defense, never attack",
-            "Purpose: Temper encrypted keys into armour for pools",
-            "Creed: Protect the clan. Safeguard the data. This is the Way",
+            "Beskar Codex Forge Terminal — designed for defense.",
+            "Creed: Temper keys, simulate failure, safeguard the clan.",
+            "Discipline: Vault drill → Init → Dracut → Self-test.",
         ];
 
         for line in lines {
@@ -334,9 +361,9 @@ impl UX {
 
         let mut out = std::io::stdout();
         let sequences = [
-            "Stoking forge coals",
-            "Aligning beskar ingots",
-            "Inscribing the Creed",
+            "Kindling plasma furnace",
+            "Calibrating vibro-press harmonics",
+            "Inscribing the Resol'nare creed",
         ];
 
         for seq in sequences.iter() {

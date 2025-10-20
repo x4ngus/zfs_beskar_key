@@ -22,14 +22,16 @@ use crate::config::{ConfigFile, CryptoCfg, Fallback, Policy, Usb};
 use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
+use dialoguer::{theme::ColorfulTheme, Input, Select};
+use std::collections::HashMap;
 
 const BESKAR_LABEL: &str = "BESKARKEY";
 const DEFAULT_CONFIG_PATH: &str = "/etc/zfs-beskar.toml";
 const DEFAULT_ZFS_BIN: &str = "/sbin/zfs";
 const DEFAULT_TIMEOUT: u64 = 10;
-const DRACUT_MODULE_DIR: &str = "/usr/lib/dracut/modules.d/95beskar";
-const DRACUT_SCRIPT_NAME: &str = "beskar-unlock.sh";
-const DRACUT_SETUP_NAME: &str = "module-setup.sh";
+pub(crate) const DRACUT_MODULE_DIR: &str = "/usr/lib/dracut/modules.d/95beskar";
+pub(crate) const DRACUT_SCRIPT_NAME: &str = "beskar-unlock.sh";
+pub(crate) const DRACUT_SETUP_NAME: &str = "module-setup.sh";
 
 const PARTED_BINARIES: &[&str] = &["/sbin/parted", "/usr/sbin/parted", "/usr/bin/parted"];
 const MKFS_BINARIES: &[&str] = &[
@@ -88,12 +90,13 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
     let usb_target = match opts.usb_device.clone() {
         Some(dev) => dev,
-        None => discover_beskar_partition()?.ok_or_else(|| {
-            anyhow!("Unable to auto-detect USB token labeled {BESKAR_LABEL}. Provide --usb-device.")
-        })?,
+        None => select_usb_device(ui)?,
     };
 
     let (usb_disk, usb_partition) = derive_device_layout(&usb_target)?;
+
+    dismantle_mounts(&usb_disk, ui)?;
+    dismantle_mounts(&usb_partition, ui)?;
 
     ui.data_panel(
         "Forge Ledger",
@@ -222,7 +225,13 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     ui.phase("Clan Briefing // Initramfs Advisory");
     if opts.offer_dracut_rebuild {
         ui.info("Armorer recommends refreshing the forge molds immediately.");
-        ui.warn("Run `dracut -f` to bake the Beskar module into initramfs.");
+        match rebuild_initramfs(ui) {
+            Ok(_) => ui.success("Initramfs reforged with Beskar module."),
+            Err(e) => {
+                ui.warn(&format!("Unable to rebuild initramfs automatically: {}", e));
+                ui.note("Run `dracut -f` manually once the issue is resolved.");
+            }
+        }
     } else {
         ui.note(
             "Dracut rebuild deferred — rerun with --offer-dracut-rebuild when you wish the Armorer to handle it.",
@@ -432,25 +441,6 @@ fn flag_label(enabled: bool) -> String {
     }
 }
 
-fn discover_beskar_partition() -> Result<Option<String>> {
-    let out = run_external(
-        BLKID_BINARIES,
-        &["-o", "device", "-t", &format!("LABEL={}", BESKAR_LABEL)],
-        Duration::from_secs(5),
-    );
-    match out {
-        Ok(data) if data.status == 0 => {
-            let device = data.stdout.trim();
-            if device.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(device.to_string()))
-            }
-        }
-        _ => Ok(None),
-    }
-}
-
 fn derive_device_layout(device: &str) -> Result<(String, String)> {
     let device = device.to_string();
     let path = Path::new(&device);
@@ -503,7 +493,8 @@ fn ensure_beskar_partition(partition: &str, ui: &UX) -> Result<()> {
 }
 
 fn wipe_usb_token(disk: &str, partition: &str, ui: &UX) -> Result<()> {
-    let _ = run_external(UMOUNT_BINARIES, &[partition], Duration::from_secs(5));
+    dismantle_mounts(disk, ui)?;
+    dismantle_mounts(partition, ui)?;
 
     run_external(
         PARTED_BINARIES,
@@ -591,7 +582,16 @@ fn forge_usb_key(partition: &str, key_filename: &str, force: bool, ui: &UX) -> R
         .context("set key file permissions")?;
 
     if let Err(err) = unmount_partition(mount_dir.path()) {
-        ui.warn(&format!("Failed to unmount {}: {}", partition, err));
+        ui.warn(&format!(
+            "Standard unmount failed for {}: {}",
+            partition, err
+        ));
+        if let Some(mp) = mount_dir.path().to_str() {
+            if let Err(inner) = force_unmount(mp, ui) {
+                ui.warn(&format!("Fallback unmount of {} failed: {}", mp, inner));
+            }
+        }
+        force_unmount(partition, ui)?;
     }
 
     ui.success(&format!(
@@ -649,7 +649,211 @@ fn detect_partition_uuid(partition: &str) -> Result<String> {
     Ok(out.stdout.trim().to_string())
 }
 
-fn install_dracut_module(dataset: &str, config_path: &Path, ui: &UX) -> Result<()> {
+fn select_usb_device(ui: &UX) -> Result<String> {
+    ui.phase("Target Selection // Choose Beskar Ingot");
+    let out = run_external(
+        LSBLK_BINARIES,
+        &["-P", "-nrpo", "NAME,TYPE,RM,SIZE,MODEL,LABEL"],
+        Duration::from_secs(5),
+    )?;
+
+    let mut disks = Vec::new();
+    let mut beskar_index: Option<usize> = None;
+    for line in out.stdout.lines() {
+        let pairs = parse_lsblk_pairs(line);
+        let kind = pairs.get("TYPE").cloned().unwrap_or_default();
+        let removable = pairs.get("RM").map(String::as_str) == Some("1");
+        let name = pairs.get("NAME").cloned().unwrap_or_default();
+        let label = pairs.get("LABEL").cloned().unwrap_or_default();
+
+        if kind == "disk" && removable {
+            let size = pairs
+                .get("SIZE")
+                .cloned()
+                .unwrap_or_else(|| "?".to_string());
+            let model = pairs
+                .get("MODEL")
+                .cloned()
+                .unwrap_or_else(|| "Unknown".to_string());
+            if label.eq_ignore_ascii_case(BESKAR_LABEL) {
+                beskar_index = Some(disks.len());
+            }
+            let desc = format!(
+                "{}  [{}]  {}{}",
+                name,
+                size,
+                model,
+                if label.is_empty() {
+                    String::new()
+                } else {
+                    format!("  (label: {})", label)
+                }
+            );
+            disks.push((format!("/dev/{}", name), desc));
+        } else if kind == "part" && removable {
+            // Include orphaned removable partitions (user may select directly)
+            let desc = format!(
+                "{} (partition){}",
+                name,
+                if label.is_empty() {
+                    String::new()
+                } else {
+                    format!(" label={}", label)
+                }
+            );
+            if label.eq_ignore_ascii_case(BESKAR_LABEL) {
+                beskar_index = Some(disks.len());
+            }
+            disks.push((format!("/dev/{}", name), desc));
+        }
+    }
+
+    if disks.is_empty() {
+        return Err(anyhow!(
+            "No removable block devices detected. Attach a USB token or specify --usb-device."
+        ));
+    }
+
+    let mut options: Vec<String> = disks.iter().map(|(_, desc)| desc.clone()).collect();
+    options.push("Manual entry (specify /dev/ path)".to_string());
+
+    let theme = ColorfulTheme::default();
+    let selection = Select::with_theme(&theme)
+        .with_prompt("Select Beskar carrier")
+        .default(beskar_index.unwrap_or(0))
+        .items(&options)
+        .interact()
+        .map_err(|e| anyhow!("selection aborted: {}", e))?;
+
+    if selection == options.len() - 1 {
+        let device: String = Input::with_theme(&theme)
+            .with_prompt("Enter block device path (e.g., /dev/sdb)")
+            .validate_with(|input: &String| -> Result<(), &str> {
+                if Path::new(input).exists() {
+                    Ok(())
+                } else {
+                    Err("Device not found on filesystem")
+                }
+            })
+            .interact_text()
+            .map_err(|e| anyhow!("manual entry aborted: {}", e))?;
+        ui.info(&format!("Beskar carrier chosen: {}", device));
+        Ok(device)
+    } else {
+        let (device, _) = &disks[selection];
+        ui.info(&format!("Beskar carrier locked: {}", device));
+        Ok(device.clone())
+    }
+}
+
+fn parse_lsblk_pairs(line: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let chars: Vec<char> = line.chars().collect();
+    let mut idx = 0;
+    while idx < chars.len() {
+        while idx < chars.len() && chars[idx].is_whitespace() {
+            idx += 1;
+        }
+        if idx >= chars.len() {
+            break;
+        }
+        let key_start = idx;
+        while idx < chars.len() && chars[idx] != '=' {
+            idx += 1;
+        }
+        if idx >= chars.len() {
+            break;
+        }
+        let key = chars[key_start..idx]
+            .iter()
+            .collect::<String>()
+            .trim()
+            .to_string();
+        idx += 1; // skip '='
+        if idx >= chars.len() {
+            break;
+        }
+        let value;
+        if chars[idx] == '"' {
+            idx += 1;
+            let value_start = idx;
+            while idx < chars.len() && chars[idx] != '"' {
+                idx += 1;
+            }
+            value = chars[value_start..idx].iter().collect::<String>();
+            idx += 1; // skip closing quote
+        } else {
+            let value_start = idx;
+            while idx < chars.len() && !chars[idx].is_whitespace() {
+                idx += 1;
+            }
+            value = chars[value_start..idx].iter().collect::<String>();
+        }
+        if !key.is_empty() {
+            map.insert(key, value);
+        }
+    }
+    map
+}
+
+fn dismantle_mounts(node: &str, ui: &UX) -> Result<()> {
+    let out = run_external(
+        LSBLK_BINARIES,
+        &["-P", "-nrpo", "NAME,MOUNTPOINT", node],
+        Duration::from_secs(5),
+    )?;
+
+    for line in out.stdout.lines() {
+        let pairs = parse_lsblk_pairs(line);
+        let target = pairs.get("NAME").cloned().unwrap_or_default();
+        let mount = pairs.get("MOUNTPOINT").cloned().unwrap_or_default();
+        if mount.is_empty() {
+            continue;
+        }
+        ui.note(&format!("Disengaging mount {} at {}", target, mount));
+        match run_external(UMOUNT_BINARIES, &[mount.as_str()], Duration::from_secs(10)) {
+            Ok(res) if res.status == 0 => {
+                settle_udev(ui)?;
+            }
+            _ => {
+                force_unmount(&mount, ui)?;
+            }
+        }
+    }
+
+    // also ensure the block node itself is not mounted
+    if let Err(err) = run_external(UMOUNT_BINARIES, &[node], Duration::from_secs(10)) {
+        ui.warn(&format!("Direct unmount of {} failed: {}", node, err));
+        if let Err(inner) = force_unmount(node, ui) {
+            ui.warn(&format!("Force unmount of {} failed: {}", node, inner));
+        }
+    }
+    Ok(())
+}
+
+fn force_unmount(target: &str, ui: &UX) -> Result<()> {
+    ui.warn(&format!("Forcing unmount of {}", target));
+    let attempts = vec![
+        vec![target.to_string()],
+        vec!["-l".to_string(), target.to_string()],
+        vec!["-f".to_string(), target.to_string()],
+        vec!["-f".to_string(), "-l".to_string(), target.to_string()],
+    ];
+
+    for args in attempts {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        if let Ok(out) = run_external(UMOUNT_BINARIES, &refs, Duration::from_secs(10)) {
+            if out.status == 0 {
+                settle_udev(ui)?;
+                return Ok(());
+            }
+        }
+    }
+
+    Err(anyhow!("unable to unmount {} (resource busy)", target))
+}
+
+pub(crate) fn install_dracut_module(dataset: &str, config_path: &Path, ui: &UX) -> Result<()> {
     fs::create_dir_all(DRACUT_MODULE_DIR).context("create dracut module directory")?;
 
     let script_path = Path::new(DRACUT_MODULE_DIR).join(DRACUT_SCRIPT_NAME);
@@ -741,6 +945,31 @@ install() {{
         "INIT_DRACUT_MODULE",
         &format!("dataset={} module={}", dataset, DRACUT_MODULE_DIR),
     );
+    Ok(())
+}
+
+pub(crate) fn rebuild_initramfs(ui: &UX) -> Result<()> {
+    use std::path::Path;
+
+    let candidates = ["/usr/bin/dracut", "/usr/sbin/dracut"];
+    let dracut_path = candidates
+        .iter()
+        .find(|p| Path::new(p).exists())
+        .ok_or_else(|| anyhow!("dracut binary not found on PATH {:?}", candidates))?;
+
+    ui.info(&format!(
+        "Invoking dracut via {} to refresh initramfs…",
+        dracut_path
+    ));
+    let cmd = Cmd::new_allowlisted(*dracut_path, Duration::from_secs(180))?;
+    let out = cmd.run(&["-f"], None)?;
+    if out.status != 0 {
+        return Err(anyhow!(
+            "dracut exited with status {}: {}",
+            out.status,
+            out.stderr.trim()
+        ));
+    }
     Ok(())
 }
 

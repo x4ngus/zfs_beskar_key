@@ -2,6 +2,29 @@
 
 ---
 
+## v1.3.0 — Armorer's Choice
+**Date:** 2025-10-20  
+**Codename:** *Clan Selector*
+
+### Highlights
+
+- **Guided USB selection**  
+  - The init flow now enumerates every removable disk and partition, defaults to existing `BESKARKEY` media, and still allows manual entry.
+  - Automatic unmount/force-unmount handling ensures reused Beskar tokens are wiped safely before reforging.
+
+- **Vault drill resilience**  
+  - Simulation preflight now shares the improved device logic, keeping rehearsals stable when tokens are recycled.
+
+- **Documentation pass**  
+  - README reflects the updated selection workflow and post-forge drill routine.
+
+### Fixes & Maintenance
+
+- Hardened unmount routines call `umount -l/-f` fallbacks, removing “target busy” failures during init.
+- Device parsing no longer relies on third-party crates; bespoke parser handles `lsblk -P` output.
+
+---
+
 ## v1.2.0 — Tempered Without Force
 **Date:** 2025-10-20  
 **Codename:** *Covert Steward*
@@ -18,6 +41,19 @@
 
 - **Narrative fully restored**  
   - `init.rs`, `ui.rs`, and `menu.rs` now echo the creed: forge phases, clan briefings, and Beskar metaphors guide every step so the CLI matches the project’s thematic mission.
+
+- **Vault drill simulation**  
+  - The interactive menu now offers a single “Vault Drill” that spins up an encrypted, ephemeral ZFS pool to rehearse both unlock and reseal without touching live datasets.  
+  - On failure it delivers a detailed remediation checklist so operators can fix `zfs load-key` conditions safely.
+
+- **Holistic doctor workflow**  
+  - `zfs_beskar_key doctor` now preflights binaries, validates config + keys, regenerates dracut modules, repairs systemd units, and can trigger `dracut -f` for a fully automated recovery drill.
+
+- **Automated initramfs rebuilds**  
+  - `zfs_beskar_key init` and the bootstrapper now offer an immediate `dracut -f` run, ensuring the Beskar module is baked into recovery images after every forge.
+
+- **Holoforge UI refresh**  
+  - Reworked banners, dividers, and glyphs to deliver a mission-focused, Mandalorian-inspired command experience.
 
 - **Documentation refresh**  
   - README now calls out the interactive menu, recounts the forge workflow, and explains how the tool safeguards existing configs.

@@ -47,7 +47,8 @@ Prefer a guided experience? Launch the interactive console and let the Armorer w
 sudo /usr/local/bin/zfs_beskar_key --menu
 ```
 
-This menu surfaces the same commands as the CLI (`init`, `unlock`, `doctor`, etc.) but wrapped in the full Beskar narrative UX.
+This menu surfaces the same commands as the CLI (`init`, `unlock`, `doctor`, etc.) but wrapped in the full Beskar narrative UX.  
+The unlock/lock entries now rehearse the flow on an ephemeral encrypted pool so your live datasets stay untouched while you test the forge.
 
 ### 1. Clone & Build
 
@@ -70,7 +71,7 @@ This script will:
 1. Detect removable disks and confirm the target before formatting.  
 2. Weld a single ext4 partition labeled `BESKARKEY`, then forge a dataset-specific key file (for example `rpool_root.keyhex`).  
 3. Hash the forged key (SHA-256), inscribe `/etc/zfs-beskar.toml`, and journal a timestamped backup if the file already exists.  
-4. Install and enable `beskar-usb.mount` and `beskar-unlock.service` through the hardened installer built into the Rust CLI.
+4. Install and enable `beskar-usb.mount` and `beskar-unlock.service` through the hardened installer built into the Rust CLI, then offer to run `dracut -f` immediately so the rescue image learns the new module.
 > Tip: You can inspect or edit the scripts/bootstrap.sh script before running — it’s fully commented and self-documenting.
 
 ### 3. Manual Setup (Optional)
@@ -102,7 +103,28 @@ The init workflow now:
 
 - Creates a timestamped backup if `/etc/zfs-beskar.toml` already exists.  
 - Updates the dataset list, key path, and checksum without disturbing other manual edits.  
-- Installs the dracut hooks and systemd units needed for unattended unlock.
+- Installs the dracut hooks and systemd units needed for unattended unlock, then offers to rebuild initramfs on the spot.  
+- Prompts you to pick the Beskar carrier (auto-highlighting any stick already labeled `BESKARKEY`) so repeat forges stay safe.
+
+---
+
+## Vault Drill Simulation
+
+Before you trust a new Beskar token in battle, rehearse the unlock/lock sequence in a disposable environment:
+
+```bash
+sudo /usr/local/bin/zfs_beskar_key --menu
+```
+Select **“Vault Drill Simulation”** and the forge will:
+
+1. Create an encrypted, file-backed ZFS pool with fresh key material.  
+2. Attempt a USB-first unlock using the forged key.  
+3. Reseal the vault and present remediation steps if anything fails.  
+4. Tear everything down, leaving your real pools untouched, and remind you to rerun `init`, `dracut -f`, and `self-test` on your production key.
+
+> Tip: rotate or reuse USB sticks freely—the selector remembers previously stamped Beskar media and wipes them safely before the next forge.
+
+Use this drill any time you rotate keys or rebuild initramfs to make sure the system is still battle-ready.
 
 ---
 
@@ -144,6 +166,7 @@ sudo systemctl daemon-reload
 - Re-running `zfs_beskar_key init` now creates a `.bak-<timestamp>` copy of your existing `/etc/zfs-beskar.toml`, updates only the required forge fields, and preserves any custom tuning.  
 - The bootstrap script uses the same logic, so rebuilding a USB token never leaves your system without a valid config.  
 - Keys forged through the CLI are hashed and recorded automatically, letting the doctor/self-test commands confirm authenticity at any time.
+- Run the **Vault Drill Simulation** whenever you rotate media or rebuild initramfs so the Armorer can rehearse the unlock path before the next reboot.
 
 ---
 
@@ -202,6 +225,11 @@ The doctor command validates:
 - Key file readability
 - ZFS binary path and permissions
 - Encryption key load state
+- Dracut module installation and initramfs freshness
+- Systemd units (`beskar-usb.mount` / `beskar-unlock.service`) and their enablement status
+- Rewrites missing config checksums and can regenerate modules/units automatically
+
+If anything is amiss, the doctor applies safe repairs (reinstalls units, refreshes dracut modules, updates checksums) and summarizes the remaining actions needed to keep the forge battle-ready.
 
 ### Re-install units after configuration changes
 

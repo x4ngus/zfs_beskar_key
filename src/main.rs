@@ -188,7 +188,7 @@ fn dispatch_command(
         }
 
         Commands::InstallUnits => {
-            install_units(ui, cfg)?;
+            cmd::repair::install_units(ui, cfg)?;
             ui.success("Systemd units installed. This is the Way.");
             timing.pace(Pace::Prompt);
         }
@@ -238,26 +238,12 @@ fn dispatch_menu_choice(
                 key_path: None,
                 force: false,
                 auto_unlock: true,
-                offer_dracut_rebuild: false,
+                offer_dracut_rebuild: true,
             };
             cmd::init::run_init(ui, timing, opts)?;
         }
-        menu::MenuChoice::Unlock => {
-            let dataset = resolve_dataset(&cli.dataset, cfg)?;
-            cmd::unlock::run_unlock(ui, timing, cfg, &dataset)?;
-        }
-        menu::MenuChoice::Lock => {
-            let dataset = resolve_dataset(&cli.dataset, cfg)?;
-            let timeout = Duration::from_secs(cfg.crypto.timeout_secs.max(1));
-            let zfs = if let Some(path) = &cfg.policy.zfs_path {
-                zfs::Zfs::with_path(path, timeout)?
-            } else {
-                zfs::Zfs::discover(timeout)?
-            };
-            let enc_root = determine_encryption_root(&zfs, &dataset, ui);
-            zfs.unload_key(&enc_root)?;
-            ui.success(&format!("Vault sealed for {}.", enc_root));
-            timing.pace(Pace::Critical);
+        menu::MenuChoice::VaultDrill => {
+            cmd::simulate::run_vault_drill(ui, timing, cfg)?;
         }
         menu::MenuChoice::Status => {
             let dataset = resolve_dataset(&cli.dataset, cfg)?;
@@ -440,102 +426,6 @@ fn auto_unlock_with(
 }
 
 // Systemd install preserved
-fn install_units(ui: &UX, cfg: &ConfigFile) -> Result<()> {
-    let sysd_path = "/etc/systemd/system";
-    let usb_unit = format!("{}/beskar-usb.mount", sysd_path);
-    let unlock_unit = format!("{}/beskar-unlock.service", sysd_path);
-    let usb_uuid = get_usb_uuid(&cfg.usb.key_hex_path)?;
-
-    let mount_content = format!(
-        r#"[Unit]
-Description=Mount BESKAR key USB
-DefaultDependencies=no
-Before=local-fs-pre.target
-
-[Mount]
-What=/dev/disk/by-uuid/{uuid}
-Where=/run/beskar
-Type=ext4
-Options=ro,nosuid,nodev,noexec,x-systemd.device-timeout=5s
-
-[Install]
-WantedBy=local-fs-pre.target
-"#,
-        uuid = usb_uuid
-    );
-
-    let unlock_content = format!(
-        r#"[Unit]
-Description=Unlock ZFS dataset with BESKAR USB key
-DefaultDependencies=no
-After=beskar-usb.mount zfs-import-cache.service zfs-import.target
-Requires=beskar-usb.mount
-Before=zfs-load-key.service zfs-mount.service local-fs.target
-
-[Service]
-Type=oneshot
-User=root
-Group=root
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-NoNewPrivileges=true
-RestrictSUIDSGID=true
-LockPersonality=true
-MemoryDenyWriteExecute=true
-RestrictRealtime=true
-RestrictNamespaces=true
-IPAddressDeny=any
-ReadWritePaths=/dev
-ReadOnlyPaths=/run/beskar
-TemporaryFileSystem=/tmp:ro
-UMask=0077
-ExecStart=/usr/local/bin/zfs_beskar_key auto-unlock --config=/etc/zfs-beskar.toml --dataset={dataset}
-
-[Install]
-WantedBy=zfs-mount.service
-"#,
-        dataset = cfg
-            .policy
-            .datasets
-            .first()
-            .unwrap_or(&"rpool/ROOT".to_string())
-    );
-
-    write_unit(&usb_unit, &mount_content)?;
-    write_unit(&unlock_unit, &unlock_content)?;
-
-    ui.info("Reloading systemd daemon and enabling units…");
-    crate::cmd::Cmd::new_allowlisted("/bin/systemctl", Duration::from_secs(5))?
-        .run(&["daemon-reload"], None)?;
-    crate::cmd::Cmd::new_allowlisted("/bin/systemctl", Duration::from_secs(5))?.run(
-        &["enable", "beskar-usb.mount", "beskar-unlock.service"],
-        None,
-    )?;
-    Ok(())
-}
-
-fn write_unit(path: &str, content: &str) -> Result<()> {
-    let mut f = File::create(path).with_context(|| format!("create {}", path))?;
-    f.write_all(content.as_bytes())?;
-    Ok(())
-}
-
-fn get_usb_uuid(_key_path: &str) -> Result<String> {
-    let output = std::process::Command::new("blkid")
-        .output()
-        .context("detect USB UUID")?;
-    let s = String::from_utf8_lossy(&output.stdout);
-    for line in s.lines() {
-        if line.contains("BESKARKEY") {
-            if let Some(u) = line.split("UUID=\"").nth(1) {
-                return Ok(u.split('"').next().unwrap_or("").to_string());
-            }
-        }
-    }
-    Err(anyhow!("could not detect BESKARKEY UUID"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
