@@ -35,10 +35,56 @@ impl Default for CryptoCfg {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Usb {
+    /// Path to the HEX-encoded key file on the mounted USB
+    #[serde(default = "default_usb_key_path")]
+    pub key_hex_path: String,
+}
+
+fn default_usb_key_path() -> String {
+    "/run/beskar/rpool.keyhex".to_string()
+}
+
+impl Default for Usb {
+    fn default() -> Self {
+        Self {
+            key_hex_path: default_usb_key_path(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Fallback {
+    /// Enable fallback to passphrase (or hex) when USB step fails
+    #[serde(default)]
+    pub enabled: bool,
+    /// Use systemd-ask-password when non-interactive (boot)
+    #[serde(default)]
+    pub askpass: bool,
+    /// Optional explicit path to systemd-ask-password (allowlisted)
+    #[serde(default)]
+    pub askpass_path: Option<String>,
+}
+
+impl Default for Fallback {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            askpass: true,
+            askpass_path: Some("/usr/bin/systemd-ask-password".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub policy: Policy,
     #[serde(default)]
     pub crypto: CryptoCfg,
+    #[serde(default)]
+    pub usb: Usb,
+    #[serde(default)]
+    pub fallback: Fallback,
 }
 
 impl Config {

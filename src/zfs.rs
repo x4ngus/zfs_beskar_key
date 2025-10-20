@@ -31,6 +31,17 @@ impl Zfs {
         Err(anyhow!("zfs binary not found: {:?}", last_err))
     }
 
+    /// Returns ZFS keyformat for dataset (e.g., "passphrase", "hex", "raw", "none")
+    pub fn keyformat(&self, dataset: &str) -> Result<String> {
+        let out = self
+            .cmd
+            .run(&["get", "-H", "-o", "value", "keyformat", dataset], None)?;
+        if out.status != 0 {
+            return Err(anyhow!("zfs get keyformat failed: {}", out.stderr));
+        }
+        Ok(out.stdout.trim().to_string())
+    }
+
     /// Use an explicit binary path (for policy-controlled environments).
     pub fn with_path(path: &str, timeout: Duration) -> Result<Self> {
         Ok(Self {

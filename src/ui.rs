@@ -65,6 +65,7 @@ impl Default for UI {
     }
 }
 
+#[allow(dead_code)]
 impl UI {
     /// Construct from explicit mode.
     pub fn new(mode: UIMode) -> Self {
