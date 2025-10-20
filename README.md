@@ -194,6 +194,6 @@ If not, fallback paths ensure you still reach your data without risking corrupti
 
 ## License
 
-MIT License © 2025 Angus Jones
+MIT License © 2025 Angus J.
 You are free to use, modify, and distribute this software under the terms of the MIT license.  
 See the `LICENSE` file for full details.
