@@ -2,6 +2,7 @@
 // src/zfs.rs – safe wrappers for ZFS key operations
 // ============================================================================
 
+use crate::cmd::{Cmd, OutputData};
 use anyhow::{anyhow, Context, Result};
 use std::time::Duration;
 
@@ -44,9 +45,13 @@ impl Zfs {
     }
 
     /// Internal runner for all ZFS sub-commands.
-    fn run(&self, args: &[&str], input: Option<&[u8]>) -> Result<crate::cmd::OutputData> {
-        let cmd = crate::cmd::Cmd::new_allowlisted(&self.path, self.timeout)?;
-        cmd.run(args, input)
+    fn run(&self, args: &[&str], input: Option<&[u8]>) -> Result<OutputData> {
+        let cmd = Cmd::new_allowlisted(&self.path, self.timeout)?;
+        let input_str = input
+            .map(|bytes| std::str::from_utf8(bytes))
+            .transpose()
+            .context("invalid UTF-8 in input")?;
+        cmd.run(args, input_str)
     }
 
     #[allow(dead_code)]

@@ -1,249 +1,241 @@
 // ============================================================================
-// src/config.rs – UI Module
+// src/ui.rs – Unified UI layer (messaging, pacing, banner, flicker, gradients)
+// - Adaptive pacing (quiet/verbose aware)
+// - Colorized messages with restrained personality
+// - Flicker intro and subtle gradient accents (disabled in --quiet)
+// - Centralized UX helpers so business logic stays clean
 // ============================================================================
-//!
-//! Progress messages are "forged" not "forced".
-//! This is The Way (of good error handling).
-//!
-//! Key goals
-//! - Works in TTY, JSON‑logging, and Quiet modes
-//! - No panics on malformed terminals; graceful degradation
-//! - Thread‑safe enough for simple multi‑threaded status updates
-//! - Zero cost when silenced (quiet mode)
 
-use anyhow::{anyhow, Result};
-use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use anyhow::Result;
+use console::{style, Emoji, Style};
+use std::{env, io::Write, thread, time::Duration};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UIMode {
-    /// Interactive terminal with a progress bar.
-    Tty,
-    /// Structured logs for automation: one JSON object per line.
-    Json,
-    /// No output except explicit errors.
-    Quiet,
+// --------------------------- Pacing -----------------------------------------
+
+/// Context of a CLI action for adaptive pacing.
+#[derive(Copy, Clone, Debug)]
+#[allow(dead_code)] // keep ahead of compiler nags; future modes will use all variants
+pub enum Pace {
+    /// Major success, completion, or irreversible action — let it breathe.
+    Critical,
+    /// Standard informational update.
+    Info,
+    /// Waiting for user input or a quick transition.
+    Prompt,
+    /// Error message or invalid input — keep it snappy.
+    Error,
+    /// Rapid fire debug/trace output.
+    Verbose,
 }
 
-impl UIMode {
-    fn from_env() -> Self {
-        match std::env::var("BESKAR_UI")
-            .unwrap_or_default()
-            .to_lowercase()
-            .as_str()
-        {
-            "json" => UIMode::Json,
-            "quiet" | "silent" | "off" => UIMode::Quiet,
-            _ => {
-                if atty::is(atty::Stream::Stderr) || atty::is(atty::Stream::Stdout) {
-                    UIMode::Tty
-                } else {
-                    UIMode::Json
-                }
-            }
+/// Adaptive timing controller.
+/// - Skips delays entirely in quiet mode
+/// - Halves delays in verbose mode
+pub struct Timing {
+    base_delay: Duration,
+    #[allow(dead_code)]
+    fast_delay: Duration,
+    slow_delay: Duration,
+    pub verbose_mode: bool,
+    pub quiet_mode: bool,
+}
+
+impl Timing {
+    pub fn new(verbose: bool, quiet: bool) -> Self {
+        // Optional global override
+        let base = env::var("BESKAR_UI_DELAY_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(2);
+
+        Self {
+            base_delay: Duration::from_secs(base),
+            fast_delay: Duration::from_millis(500),
+            slow_delay: Duration::from_secs(3),
+            verbose_mode: verbose,
+            quiet_mode: quiet,
+        }
+    }
+
+    /// Adaptive pause chosen by pace type.
+    pub fn pace(&self, p: Pace) {
+        if self.quiet_mode {
+            return;
+        }
+
+        let duration = match p {
+            Pace::Critical => self.slow_delay,
+            Pace::Info => self.base_delay,
+            Pace::Prompt => Duration::from_millis(700),
+            Pace::Error => Duration::from_millis(300),
+            Pace::Verbose => Duration::from_millis(200),
+        };
+
+        let effective = if self.verbose_mode {
+            duration / 2
+        } else {
+            duration
+        };
+
+        thread::sleep(effective);
+    }
+
+    /// Explicit duration when needed.
+    #[allow(dead_code)]
+    pub fn pause_secs(&self, secs: u64) {
+        if !self.quiet_mode {
+            thread::sleep(Duration::from_secs(secs));
         }
     }
 }
 
-/// UI writes to stderr by default so stdout can stay clean for machine output.
-pub struct UI {
-    mode: UIMode,
-    inner: Arc<Mutex<Inner>>, // serialize writes across threads
+// --------------------------- UX Facade --------------------------------------
+
+/// Centralized UI facade for consistent look & feel.
+pub struct UX {
+    #[allow(unused)]
+    pub verbose: bool,
+    #[allow(unused)]
+    pub quiet: bool,
+    // Pre-baked styles for consistent visuals
+    s_info: Style,
+    s_warn: Style,
+    s_ok: Style,
+    s_err: Style,
+    s_head: Style,
+    s_tag: Style,
 }
 
-struct Inner {
-    started: Instant,
-    last_flush: Instant,
-    current_pct: u8,
-    current_msg: String,
-}
-
-impl Default for UI {
-    fn default() -> Self {
-        Self::new(UIMode::from_env())
-    }
-}
-
-#[allow(dead_code)]
-impl UI {
-    /// Construct from explicit mode.
-    pub fn new(mode: UIMode) -> Self {
-        let now = Instant::now();
-        UI {
-            mode,
-            inner: Arc::new(Mutex::new(Inner {
-                started: now,
-                last_flush: now,
-                current_pct: 0,
-                current_msg: String::new(),
-            })),
+impl UX {
+    pub fn new(verbose: bool, quiet: bool) -> Self {
+        Self {
+            verbose,
+            quiet,
+            s_info: Style::new().blue(),
+            s_warn: Style::new().yellow(),
+            s_ok: Style::new().green(),
+            s_err: Style::new().red().bold(),
+            s_head: Style::new().cyan().bold(),
+            s_tag: Style::new().yellow(),
         }
     }
 
-    /// Construct from environment (BESKAR_UI = tty|json|quiet). Defaults smartly.
-    pub fn from_env() -> Self {
-        Self::default()
+    /// Allow dynamic runtime toggling of verbosity
+    #[allow(dead_code)]
+    pub fn set_verbose(&mut self, enable: bool) {
+        self.verbose = enable;
     }
 
-    /// Primary progress reporter.
-    pub fn blaster(&self, percent: u8, msg: &str) -> Result<()> {
-        let mut g = self.inner.lock().map_err(|_| anyhow!("ui poisoned"))?;
-        let pct = percent.min(100);
-        g.current_pct = pct;
-        g.current_msg.clear();
-        g.current_msg.push_str(msg);
-
-        match self.mode {
-            UIMode::Quiet => Ok(()),
-            UIMode::Json => self.emit_json_locked(&mut g, None),
-            UIMode::Tty => self.render_tty_locked(&mut g),
+    /// Future feature marker for debug tracing (silences unused warnings now)
+    #[allow(dead_code)]
+    pub fn trace(&self, msg: &str) {
+        if self.verbose && !self.quiet {
+            println!("{} {}", style("[TRACE]").dim(), msg);
         }
     }
 
-    /// Human-readable info line.
-    pub fn info(&self, msg: &str) -> Result<()> {
-        self.emit_event("info", msg, None)
+    // ---------------------- Messaging ----------------------
+
+    pub fn info(&self, msg: &str) {
+        if self.quiet {
+            return;
+        }
+        println!("{} {}", self.s_info.apply_to("[INFO]"), msg);
     }
 
-    /// Warning line that still allows continuation.
-    pub fn warn(&self, msg: &str) -> Result<()> {
-        self.emit_event("warn", msg, None)
+    pub fn success(&self, msg: &str) {
+        if self.quiet {
+            return;
+        }
+        let check = Emoji("✅", "[OK]");
+        println!("{} {}", check, self.s_ok.apply_to(msg));
     }
 
-    /// Fatal error line (does not exit; caller decides control flow).
-    pub fn error(&self, msg: &str) -> Result<()> {
-        self.emit_event("error", msg, None)
+    pub fn warn(&self, msg: &str) {
+        if self.quiet {
+            return;
+        }
+        println!("{} {}", Emoji("⚠️", "[WARN]"), self.s_warn.apply_to(msg));
     }
 
-    /// Mark the end of forging.
-    pub fn finish(&self, msg: &str) -> Result<()> {
-        let mut g = self.inner.lock().map_err(|_| anyhow!("ui poisoned"))?;
-        g.current_pct = 100;
-        g.current_msg = msg.to_owned();
-        match self.mode {
-            UIMode::Quiet => Ok(()),
-            UIMode::Json => self.emit_json_locked(&mut g, Some("finish")),
-            UIMode::Tty => {
-                self.render_tty_locked(&mut g)?;
-                eprintln!();
-                Ok(())
-            }
+    pub fn error(&self, msg: &str) {
+        // Errors should be visible even in quiet mode
+        eprintln!("{} {}", Emoji("❌", "[ERR]"), self.s_err.apply_to(msg));
+    }
+    #[allow(dead_code)]
+    pub fn debug(&self, msg: &str) {
+        if self.verbose && !self.quiet {
+            println!("{} {}", style("[DEBUG]").dim(), msg);
         }
     }
 
-    /// Emit a heartbeat in long operations so logs don’t go silent.
-    pub fn heartbeat(&self, _label: &str, interval: Duration) -> Result<()> {
-        let mut g = self.inner.lock().map_err(|_| anyhow!("ui poisoned"))?;
-        if g.last_flush.elapsed() >= interval {
-            match self.mode {
-                UIMode::Quiet => {}
-                UIMode::Json => {
-                    self.emit_json_locked(&mut g, Some("heartbeat"))?;
-                }
-                UIMode::Tty => {
-                    // no extra TTY noise; re-draw once per interval
-                    self.render_tty_locked(&mut g)?;
-                }
-            }
+    // ---------------------- Banner & Effects ----------------------
+
+    /// Main banner with subtle “space-terminal” vibe.
+    pub fn banner(&self) {
+        if self.quiet {
+            return;
         }
+
+        let border = "══════════════════════════════════════════════════════════════════";
+        println!(
+            "\n{}\n{}\n{}\n{}\n",
+            self.s_head.apply_to(format!("╔{}╗", border)),
+            self.s_head
+                .apply_to("║                ZFS  BESKAR  KEY  CONSOLE                         ║"),
+            self.s_tag
+                .apply_to("║             For the modern-day Bounty Hunter.                    ║"),
+            self.s_head.apply_to(format!("╚{}╝", border)),
+        );
+        self.gradient_line(":: INITIALIZING SECURE INTERFACE ::");
+    }
+
+    /// Brief flicker effect to suggest a terminal powering up (skipped in quiet).
+    pub fn banner_flicker(&self, timing: &Timing) -> Result<()> {
+        if self.quiet {
+            return Ok(());
+        }
+        let mut out = std::io::stdout();
+        for _ in 0..3 {
+            write!(
+                out,
+                "\r{}",
+                style(":: INITIALIZING INTERFACE ::").green().dim()
+            )?;
+            out.flush()?;
+            thread::sleep(Duration::from_millis(140));
+            write!(out, "\r                             ")?; // clear line
+            out.flush()?;
+            thread::sleep(Duration::from_millis(110));
+        }
+        println!();
+        timing.pace(Pace::Prompt);
         Ok(())
     }
 
-    fn emit_event(&self, level: &str, msg: &str, extra: Option<&str>) -> Result<()> {
-        let mut g = self.inner.lock().map_err(|_| anyhow!("ui poisoned"))?;
-        match self.mode {
-            UIMode::Quiet => Ok(()),
-            UIMode::Json => {
-                let obj = serde_json::json!({
-                    "ts_ms": now_ms(),
-                    "level": level,
-                    "event": extra.unwrap_or(""),
-                    "msg": msg,
-                });
-                writeln!(io::stderr(), "{}", obj).map_err(|e| anyhow!(e))?;
-                g.last_flush = Instant::now();
-                Ok(())
-            }
-            UIMode::Tty => {
-                match level {
-                    "warn" => eprintln!("⚠️  {}", msg),
-                    "error" => eprintln!("❌ {}", msg),
-                    _ => eprintln!("{}", msg),
-                }
-                g.last_flush = Instant::now();
-                Ok(())
-            }
+    /// Subtle left-to-right color shift; restrained to avoid noise.
+    pub fn gradient_line(&self, text: &str) {
+        if self.quiet {
+            return;
         }
-    }
+        let segs = 3usize.max(text.len() / 3);
+        let (c1, c2, c3) = (
+            Style::new().cyan(),
+            Style::new().green(),
+            Style::new().yellow(),
+        );
+        let mut out = String::with_capacity(text.len());
 
-    fn render_tty_locked(&self, g: &mut Inner) -> Result<()> {
-        // Render a one-line progress bar. Keep dependencies minimal and avoid panics.
-        let width = terminal_width().unwrap_or(80).max(40);
-        let pct = g.current_pct as usize;
-        let bar_w = (width.saturating_sub(12)).min(60); // room for brackets & pct
-        let filled = bar_w * pct / 100;
-
-        let mut line = String::with_capacity(width);
-        line.push('[');
-        line.push_str(&"#".repeat(filled));
-        line.push_str(&"-".repeat(bar_w - filled));
-        line.push(']');
-        line.push(' ');
-        line.push_str(&format!("{:>3}% ", pct));
-
-        // Trim/ellipsize message to fit
-        let mut msg = g.current_msg.clone();
-        let remaining = width.saturating_sub(line.len());
-        if msg.len() > remaining {
-            if remaining > 1 {
-                msg.truncate(remaining.saturating_sub(1));
-                msg.push('…');
+        for (i, ch) in text.chars().enumerate() {
+            let styled = if i % segs == 0 {
+                c1.apply_to(ch.to_string()).to_string()
+            } else if i % segs == 1 {
+                c2.apply_to(ch.to_string()).to_string()
             } else {
-                msg.clear();
-            }
+                c3.apply_to(ch.to_string()).to_string()
+            };
+            out.push_str(&styled);
         }
-        line.push_str(&msg);
-
-        // Carriage-return update without newline
-        write!(io::stderr(), "\r{}", line).map_err(|e| anyhow!(e))?;
-        io::stderr().flush().map_err(|e| anyhow!(e))?;
-        g.last_flush = Instant::now();
-        Ok(())
+        println!("{}", out);
     }
-
-    fn emit_json_locked(&self, g: &mut Inner, event: Option<&str>) -> Result<()> {
-        let obj = serde_json::json!({
-            "ts_ms": now_ms(),
-            "event": event.unwrap_or("progress"),
-            "percent": g.current_pct,
-            "msg": g.current_msg,
-            "uptime_ms": g.started.elapsed().as_millis() as u64,
-        });
-        writeln!(io::stderr(), "{}", obj).map_err(|e| anyhow!(e))?;
-        g.last_flush = Instant::now();
-        Ok(())
-    }
-}
-
-fn now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-fn terminal_width() -> Option<usize> {
-    #[cfg(unix)]
-    {
-        use libc::{ioctl, winsize, STDOUT_FILENO, TIOCGWINSZ};
-        unsafe {
-            let mut ws: winsize = std::mem::zeroed();
-            if ioctl(STDOUT_FILENO, TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 {
-                return Some(ws.ws_col as usize);
-            }
-        }
-    }
-    None
 }

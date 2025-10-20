@@ -1,23 +1,37 @@
 // ============================================================================
-// src/config.rs – strict config loader
+// src/config.rs – strict config loader (aligned with CLI UX system)
 // ============================================================================
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+// ----------------------------------------------------------------------------
+// Policy Section
+// ----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Policy {
+    /// List of managed datasets (e.g., ["rpool/ROOT"])
     pub datasets: Vec<String>,
+
+    /// Optional explicit path to `zfs` binary
     #[serde(default)]
     pub zfs_path: Option<String>,
+
+    /// Allow root context execution (advanced users)
     #[serde(default)]
     pub allow_root: bool,
 }
 
+// ----------------------------------------------------------------------------
+// Crypto Section
+// ----------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CryptoCfg {
+    /// Timeout (seconds) for zfs operations
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
 }
@@ -33,6 +47,10 @@ impl Default for CryptoCfg {
         }
     }
 }
+
+// ----------------------------------------------------------------------------
+// USB Section
+// ----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usb {
@@ -58,14 +76,20 @@ impl Default for Usb {
     }
 }
 
+// ----------------------------------------------------------------------------
+// Fallback Section
+// ----------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fallback {
     /// Enable fallback to passphrase (or hex) when USB step fails
     #[serde(default)]
     pub enabled: bool,
+
     /// Use systemd-ask-password when non-interactive (boot)
     #[serde(default)]
     pub askpass: bool,
+
     /// Optional explicit path to systemd-ask-password (allowlisted)
     #[serde(default)]
     pub askpass_path: Option<String>,
@@ -81,8 +105,12 @@ impl Default for Fallback {
     }
 }
 
+// ----------------------------------------------------------------------------
+// Main Config Object
+// ----------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
+pub struct ConfigFile {
     pub policy: Policy,
     #[serde(default)]
     pub crypto: CryptoCfg,
@@ -90,17 +118,31 @@ pub struct Config {
     pub usb: Usb,
     #[serde(default)]
     pub fallback: Fallback,
+
+    /// Internal path reference for better error messages (not serialized)
+    #[serde(skip)]
+    pub path: PathBuf,
 }
 
-impl Config {
+impl ConfigFile {
+    /// Load a TOML or YAML config from disk.
     pub fn load<P: AsRef<Path>>(p: P) -> Result<Self> {
-        let s = fs::read_to_string(&p)
-            .with_context(|| format!("read config: {}", p.as_ref().display()))?;
-        let cfg: Self = if p.as_ref().extension().and_then(|e| e.to_str()) == Some("toml") {
+        let path_ref = p.as_ref();
+        let s = fs::read_to_string(path_ref)
+            .with_context(|| format!("read config: {}", path_ref.display()))?;
+
+        let mut cfg: Self = if path_ref
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("toml"))
+            .unwrap_or(false)
+        {
             toml::from_str(&s).context("toml parse")?
         } else {
             serde_yaml::from_str(&s).context("yaml parse")?
         };
+
+        cfg.path = path_ref.to_path_buf();
         Ok(cfg)
     }
 }
