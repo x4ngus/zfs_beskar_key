@@ -36,19 +36,24 @@ impl Default for CryptoCfg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usb {
-    /// Path to the HEX-encoded key file on the mounted USB
+    /// Path to USB key file (usually /run/beskar/key.hex)
     #[serde(default = "default_usb_key_path")]
     pub key_hex_path: String,
+
+    /// Optional SHA-256 checksum for integrity verification
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
 }
 
 fn default_usb_key_path() -> String {
-    "/run/beskar/rpool.keyhex".to_string()
+    "/run/beskar/key.hex".to_string()
 }
 
 impl Default for Usb {
     fn default() -> Self {
         Self {
             key_hex_path: default_usb_key_path(),
+            expected_sha256: None,
         }
     }
 }
