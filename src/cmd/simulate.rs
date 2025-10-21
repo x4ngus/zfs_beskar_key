@@ -47,7 +47,9 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
                 ui.success("Ephemeral vault unlocked — the beskar token proves its worth.");
                 audit_status(&zfs, &sim.dataset_name, ui);
             } else {
-                ui.warn("Vault status uncertain after simulation; inspect `zfs keystatus` directly.");
+                ui.warn(
+                    "Vault status uncertain after simulation; inspect `zfs keystatus` directly.",
+                );
             }
         }
         Err(err) => {
@@ -433,7 +435,10 @@ fn emit_reseal_remediation(ui: &UX, timing: &Timing, base_cfg: &ConfigFile, err:
         .cloned()
         .unwrap_or_else(|| "<dataset>".to_string());
 
-    ui.error(&format!("Reseal attempt on the ephemeral vault failed: {}", err));
+    ui.error(&format!(
+        "Reseal attempt on the ephemeral vault failed: {}",
+        err
+    ));
     timing.pace(Pace::Error);
     ui.data_panel(
         "Reseal Troubleshooting",

@@ -428,9 +428,7 @@ fn auto_unlock_with(
         }
         ui.info("USB key checksum verified (SHA-256 match).");
     } else {
-        ui.warn(
-            "No reference SHA-256 in config.usb.expected_sha256 — authenticity check skipped.",
-        );
+        ui.warn("No reference SHA-256 in config.usb.expected_sha256 — authenticity check skipped.");
     }
 
     if !unlocked {

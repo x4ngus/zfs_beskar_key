@@ -14,7 +14,7 @@ use std::io::Write;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tempfile::tempdir;
+use tempfile::{tempdir, NamedTempFile};
 use zeroize::Zeroizing;
 
 use crate::cmd::{Cmd, OutputData};
@@ -23,6 +23,7 @@ use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
 use crate::util::binary::determine_binary_path;
+use crate::zfs::Zfs;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::collections::HashMap;
 
@@ -79,11 +80,53 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
     let binary_path = determine_binary_path(None)?;
 
-    let dataset = opts
+    let target_dataset = opts
         .pool
         .clone()
         .unwrap_or_else(|| "rpool/ROOT".to_string());
-    let key_basename = sanitize_key_name(&dataset);
+
+    let zfs = Zfs::discover(Duration::from_secs(DEFAULT_TIMEOUT))
+        .context("detect zfs binary for encryption checks")?;
+    let enc_root = match zfs.encryption_root(&target_dataset) {
+        Ok(root) if !root.trim().is_empty() => root,
+        Ok(_) => target_dataset.clone(),
+        Err(err) => {
+            ui.warn(&format!(
+                "Unable to identify encryption root for {} ({}). Falling back to the specified dataset.",
+                target_dataset, err
+            ));
+            target_dataset.clone()
+        }
+    };
+
+    if enc_root != target_dataset {
+        ui.info(&format!(
+            "Dataset {} draws its ward from encryption root {}.",
+            target_dataset, enc_root
+        ));
+    }
+
+    if !zfs
+        .is_encrypted(&enc_root)
+        .with_context(|| format!("verify encryption status of {}", enc_root))?
+    {
+        return Err(anyhow!(
+            "Dataset {} is not encrypted — no key forge required.",
+            enc_root
+        ));
+    }
+
+    if !zfs
+        .is_unlocked(&enc_root)
+        .with_context(|| format!("check keystatus for {}", enc_root))?
+    {
+        return Err(anyhow!(
+            "Encryption root {} is sealed. Unlock it before attempting a new forge.",
+            enc_root
+        ));
+    }
+
+    let key_basename = sanitize_key_name(&enc_root);
 
     let key_path = opts
         .key_path
@@ -98,6 +141,8 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/run/beskar".to_string());
 
+    let existing_key = read_existing_key(&key_path)?;
+
     let usb_target = match opts.usb_device.clone() {
         Some(dev) => dev,
         None => select_usb_device(ui, opts.confirm_each_phase)?,
@@ -111,7 +156,8 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     ui.data_panel(
         "Armorer's Ledger",
         &[
-            ("Dataset", dataset.clone()),
+            ("Dataset", target_dataset.clone()),
+            ("Encryption Root", enc_root.clone()),
             ("USB Disk", usb_disk.clone()),
             ("USB Partition", usb_partition.clone()),
             ("Key Mount Path", key_mount_dir.clone()),
@@ -121,7 +167,11 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     );
     timing.pace(Pace::Info);
 
-    begin_phase(ui, "Material Survey // Inspect Alloy", opts.confirm_each_phase)?;
+    begin_phase(
+        ui,
+        "Material Survey // Inspect Alloy",
+        opts.confirm_each_phase,
+    )?;
     report_usb_target(ui, &usb_disk);
     if usb_partition != usb_disk {
         report_usb_target(ui, &usb_partition);
@@ -166,22 +216,22 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
                     match choice {
                         0 => {
-                        ui.warn(&format!(
-                            "As commanded — cleansing {} and carving the proper crest.",
-                            usb_disk
-                        ));
+                            ui.warn(&format!(
+                                "As commanded — cleansing {} and carving the proper crest.",
+                                usb_disk
+                            ));
                             wipe_usb_token(&usb_disk, &usb_partition, ui)?;
                             settle_udev(ui)?;
                             effective_force = true;
                             continue;
                         }
                         1 => {
-                        ui.note("Let the signals settle. I will verify the crest once more.");
+                            ui.note("Let the signals settle. I will verify the crest once more.");
                             settle_udev(ui)?;
                             continue;
                         }
                         _ => {
-                        ui.warn("Safe mode terminated. The forge rests until you return.");
+                            ui.warn("Safe mode terminated. The forge rests until you return.");
                             return Err(anyhow!("initialization aborted by operator"));
                         }
                     }
@@ -191,7 +241,15 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     }
 
     begin_phase(ui, "Keysmithing // Beskar Pattern", opts.confirm_each_phase)?;
-    let forge = forge_usb_key(&usb_partition, &key_filename, effective_force, ui)?;
+    let key_material = generate_key_material()?;
+    apply_key_to_encryption_root(&zfs, &enc_root, &key_material, existing_key.as_ref(), ui)?;
+    write_key_to_usb(
+        &usb_partition,
+        &key_filename,
+        effective_force,
+        &key_material.hex,
+        ui,
+    )?;
     timing.pace(Pace::Info);
 
     ensure_runtime_mount(
@@ -203,14 +261,14 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     )?;
     timing.pace(Pace::Info);
 
-    let fingerprint_short = group_string(&forge.sha256[..32], 8, ' ');
+    let fingerprint_short = group_string(&key_material.sha256[..32], 8, ' ');
     ui.security(&format!(
         "Key signet etched — SHA-256 (first 128 bits): {}",
         fingerprint_short
     ));
     audit_log(
         "INIT_KEY",
-        &format!("partition={} sha256={}", usb_partition, forge.sha256),
+        &format!("partition={} sha256={}", usb_partition, key_material.sha256),
     );
 
     begin_phase(ui, "Configuration Engraving", opts.confirm_each_phase)?;
@@ -231,9 +289,9 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
             Ok(mut existing) => {
                 normalize_config(
                     &mut existing,
-                    &dataset,
+                    &enc_root,
                     &key_path,
-                    &forge.sha256,
+                    &key_material.sha256,
                     DEFAULT_TIMEOUT,
                     &binary_path,
                 );
@@ -245,9 +303,9 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
                     err
                 ));
                 default_config(
-                    &dataset,
+                    &enc_root,
                     &key_path,
-                    &forge.sha256,
+                    &key_material.sha256,
                     DEFAULT_TIMEOUT,
                     &config_path,
                     &binary_path,
@@ -258,9 +316,9 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     } else {
         (
             default_config(
-                &dataset,
+                &enc_root,
                 &key_path,
-                &forge.sha256,
+                &key_material.sha256,
                 DEFAULT_TIMEOUT,
                 &config_path,
                 &binary_path,
@@ -284,7 +342,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         "Armor Fittings // Dracut Integration",
         opts.confirm_each_phase,
     )?;
-    install_dracut_module(&dataset, &config_path, &binary_path, ui)?;
+    install_dracut_module(&enc_root, &config_path, &binary_path, ui)?;
     timing.pace(Pace::Info);
 
     begin_phase(ui, "Clan Contingency", opts.confirm_each_phase)?;
@@ -340,8 +398,8 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     audit_log(
         "INIT_COMPLETE",
         &format!(
-            "dataset={} partition={} uuid={}",
-            dataset, usb_partition, usb_uuid
+            "dataset={} encryption_root={} partition={} uuid={}",
+            target_dataset, enc_root, usb_partition, usb_uuid
         ),
     );
     timing.pace(Pace::Critical);
@@ -499,7 +557,10 @@ fn report_usb_target(ui: &UX, device: &str) {
             }
         }
         Err(err) => {
-            ui.warn(&format!("My instruments cannot reach {} ({}).", device, err));
+            ui.warn(&format!(
+                "My instruments cannot reach {} ({}).",
+                device, err
+            ));
             ui.note("Proceeding blind — confirm the path before we strike the hammer again.");
             audit_log(
                 "INIT_USB_SCAN_FAIL",
@@ -677,7 +738,10 @@ fn wipe_usb_token(disk: &str, partition: &str, ui: &UX) -> Result<()> {
 fn settle_udev(ui: &UX) -> Result<()> {
     let res = run_external(UDEVADM_BINARIES, &["settle"], Duration::from_secs(10));
     if let Err(err) = res {
-        ui.warn(&format!("udevadm settle faltered ({}). Expect a brief delay.", err));
+        ui.warn(&format!(
+            "udevadm settle faltered ({}). Expect a brief delay.",
+            err
+        ));
     }
     Ok(())
 }
@@ -699,16 +763,27 @@ fn query_block_info(device: &str, field: &str) -> Result<String> {
     Ok(out.stdout.trim().to_string())
 }
 
-struct ForgeResult {
+struct KeyMaterial {
+    raw: Zeroizing<Vec<u8>>,
+    hex: String,
     sha256: String,
 }
 
-fn forge_usb_key(partition: &str, key_filename: &str, force: bool, ui: &UX) -> Result<ForgeResult> {
-    let mut key_bytes = Zeroizing::new([0u8; 32]);
-    OsRng.fill_bytes(&mut *key_bytes);
-    let key_hex = hex::encode(&*key_bytes);
-    let sha256 = hex::encode(Sha256::digest(&*key_bytes));
+fn generate_key_material() -> Result<KeyMaterial> {
+    let mut raw = Zeroizing::new(vec![0u8; 32]);
+    OsRng.fill_bytes(&mut raw[..]);
+    let hex = hex::encode(&*raw);
+    let sha256 = hex::encode(Sha256::digest(&*raw));
+    Ok(KeyMaterial { raw, hex, sha256 })
+}
 
+fn write_key_to_usb(
+    partition: &str,
+    key_filename: &str,
+    force: bool,
+    key_hex: &str,
+    ui: &UX,
+) -> Result<()> {
     let mount_dir = tempdir().context("create temporary mount directory")?;
     mount_partition(partition, mount_dir.path())?;
 
@@ -799,7 +874,126 @@ fn forge_usb_key(partition: &str, key_filename: &str, force: bool, ui: &UX) -> R
         "Beskar key sealed at {} atop {}.",
         key_filename, partition
     ));
-    Ok(ForgeResult { sha256 })
+    Ok(())
+}
+
+struct ExistingKey {
+    raw: Zeroizing<Vec<u8>>,
+}
+
+fn read_existing_key(path: &Path) -> Result<Option<ExistingKey>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw_text = fs::read_to_string(path)
+        .with_context(|| format!("read existing key file {}", path.display()))?;
+    let cleaned: String = raw_text.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if cleaned.len() != 64 {
+        return Err(anyhow!(
+            "Existing key file {} malformed (expected 64 hex chars, found {}).",
+            path.display(),
+            cleaned.len()
+        ));
+    }
+
+    let raw_bytes = Zeroizing::new(
+        hex::decode(cleaned)
+            .with_context(|| format!("decode existing key material at {}", path.display()))?,
+    );
+    Ok(Some(ExistingKey { raw: raw_bytes }))
+}
+
+fn apply_key_to_encryption_root(
+    zfs: &Zfs,
+    enc_root: &str,
+    key_material: &KeyMaterial,
+    existing_key: Option<&ExistingKey>,
+    ui: &UX,
+) -> Result<()> {
+    ui.info(&format!(
+        "Re-keying encryption root {} with freshly forged beskar.",
+        enc_root
+    ));
+
+    change_key_with_bytes(zfs, enc_root, &key_material.raw[..])
+        .with_context(|| format!("change-key invocation for {}", enc_root))?;
+
+    zfs.set_property(enc_root, "keylocation", "prompt")
+        .with_context(|| format!("restore keylocation=prompt on {}", enc_root))?;
+    zfs.set_property(enc_root, "keyformat", "raw")
+        .with_context(|| format!("ensure keyformat=raw on {}", enc_root))?;
+
+    match zfs.load_key(enc_root, &key_material.raw[..]) {
+        Ok(_) => {
+            ui.success(&format!(
+                "Encryption root {} now recognizes the reforged key.",
+                enc_root
+            ));
+            audit_log(
+                "INIT_ZFS_REKEY",
+                &format!(
+                    "encryption_root={} sha256={}",
+                    enc_root, key_material.sha256
+                ),
+            );
+            Ok(())
+        }
+        Err(err) => {
+            let err_msg = err.to_string();
+            if err_msg.contains("Key already loaded") {
+                ui.note("ZFS reports the key was already resident; verification deferred to the self-test.");
+                audit_log(
+                    "INIT_ZFS_REKEY_WARN",
+                    &format!(
+                        "encryption_root={} note={}",
+                        enc_root,
+                        err_msg.replace('\n', " ")
+                    ),
+                );
+                return Ok(());
+            }
+
+            ui.error(&format!(
+                "New key rejected when loading {} ({}).",
+                enc_root, err_msg
+            ));
+            if let Some(previous) = existing_key {
+                ui.warn("Attempting to restore the prior key material to maintain access.");
+                if let Err(revert_err) = change_key_with_bytes(zfs, enc_root, &previous.raw[..]) {
+                    ui.error(&format!(
+                        "Unable to revert encryption root {} ({}). Manual recovery required.",
+                        enc_root, revert_err
+                    ));
+                } else {
+                    let _ = zfs.set_property(enc_root, "keylocation", "prompt");
+                    let _ = zfs.set_property(enc_root, "keyformat", "raw");
+                    if let Err(load_err) = zfs.load_key(enc_root, &previous.raw[..]) {
+                        ui.warn(&format!(
+                            "Reverted key could not be loaded automatically ({}).",
+                            load_err
+                        ));
+                    }
+                }
+            }
+
+            Err(err.context(format!(
+                "new key rejected while loading encryption root {}",
+                enc_root
+            )))
+        }
+    }
+}
+
+fn change_key_with_bytes(zfs: &Zfs, dataset: &str, key_bytes: &[u8]) -> Result<()> {
+    let mut temp = NamedTempFile::new().context("create temporary key material file")?;
+    temp.write_all(key_bytes)
+        .context("write key material to temporary file")?;
+    temp.as_file().sync_all().ok();
+    fs::set_permissions(temp.path(), Permissions::from_mode(0o600))
+        .context("set temporary key permissions")?;
+    zfs.change_key_from_file(dataset, temp.path())?;
+    Ok(())
 }
 
 fn ensure_runtime_mount(
@@ -1045,7 +1239,9 @@ fn select_usb_device(ui: &UX, confirm_each_phase: bool) -> Result<String> {
                         return Ok(trimmed.to_string());
                     }
                     _ => {
-                        ui.warn("Operator withdrew from the forge during safe-mode device selection.");
+                        ui.warn(
+                            "Operator withdrew from the forge during safe-mode device selection.",
+                        );
                         return Err(anyhow!("initialization aborted by operator"));
                     }
                 }
@@ -1310,7 +1506,7 @@ depends() {{
 }}
 
 install() {{
-    inst_multiple blkid mount umount
+    inst_multiple blkid mount umount systemd-ask-password
     inst_simple "$moddir/{script}" /sbin/{script}
     inst_simple "{binary}" "{binary}"
     inst_simple "{config}" "{config}"
@@ -1329,10 +1525,7 @@ install() {{
     fs::set_permissions(&setup_path, Permissions::from_mode(0o750))
         .context("set module setup permissions")?;
 
-    ui.success(&format!(
-        "Dracut module reforged at {}.",
-        DRACUT_MODULE_DIR
-    ));
+    ui.success(&format!("Dracut module reforged at {}.", DRACUT_MODULE_DIR));
     audit_log(
         "INIT_DRACUT_MODULE",
         &format!("dataset={} module={}", dataset, DRACUT_MODULE_DIR),

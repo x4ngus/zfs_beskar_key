@@ -673,7 +673,10 @@ fn summarize(report: &[ReportEntry], ui: &UX, timing: &Timing) -> Result<()> {
         ui.note(&format!("Warnings tallied: {}", warn_details.join(" | ")));
     }
     if !fail_details.is_empty() {
-        ui.warn(&format!("Failures demanding attention: {}", fail_details.join(" | ")));
+        ui.warn(&format!(
+            "Failures demanding attention: {}",
+            fail_details.join(" | ")
+        ));
     }
 
     if fails > 0 {
@@ -686,11 +689,15 @@ fn summarize(report: &[ReportEntry], ui: &UX, timing: &Timing) -> Result<()> {
 
 fn verify_systemd_units(ui: &UX, cfg: &ConfigFile, binary_path: &Path) -> UnitVerification {
     match run_unit_verification(&[USB_MOUNT_UNIT, UNLOCK_UNIT_NAME]) {
-        Ok(_) => UnitVerification::Pass("systemd-analyze verify clean for Beskar units.".to_string()),
+        Ok(_) => {
+            UnitVerification::Pass("systemd-analyze verify clean for Beskar units.".to_string())
+        }
         Err(err) => {
             let err_msg = err.to_string();
             if err_msg.contains("systemd-analyze not found") {
-                return UnitVerification::Warn("systemd-analyze missing; skipping verification.".to_string());
+                return UnitVerification::Warn(
+                    "systemd-analyze missing; skipping verification.".to_string(),
+                );
             }
             match repair::install_units(ui, cfg, binary_path) {
                 Ok(_) => match run_unit_verification(&[USB_MOUNT_UNIT, UNLOCK_UNIT_NAME]) {

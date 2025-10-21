@@ -4,6 +4,7 @@
 
 use crate::cmd::{Cmd, OutputData};
 use anyhow::{anyhow, Context, Result};
+use std::path::Path;
 use std::time::Duration;
 
 /// Safe ZFS command wrapper. All calls go through the allow-listed `cmd` layer.
@@ -99,5 +100,35 @@ impl Zfs {
             return Err(anyhow!("zfs get encryptionroot failed: {}", out.stderr));
         }
         Ok(out.stdout.trim().to_string())
+    }
+
+    /// Change the dataset key by pointing ZFS at a temporary key file.
+    pub fn change_key_from_file(&self, dataset: &str, key_path: &Path) -> Result<()> {
+        let keylocation = format!("keylocation=file://{}", key_path.display());
+        let out = self.run(
+            &[
+                "change-key",
+                "-o",
+                "keyformat=raw",
+                "-o",
+                &keylocation,
+                dataset,
+            ],
+            None,
+        )?;
+        if out.status != 0 {
+            return Err(anyhow!("zfs change-key failed: {}", out.stderr));
+        }
+        Ok(())
+    }
+
+    /// Set an arbitrary property on a dataset (used for keylocation/keyformat resets).
+    pub fn set_property(&self, dataset: &str, property: &str, value: &str) -> Result<()> {
+        let assignment = format!("{}={}", property, value);
+        let out = self.run(&["set", &assignment, dataset], None)?;
+        if out.status != 0 {
+            return Err(anyhow!("zfs set {} failed: {}", assignment, out.stderr));
+        }
+        Ok(())
     }
 }

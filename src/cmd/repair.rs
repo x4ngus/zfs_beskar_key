@@ -95,10 +95,8 @@ WantedBy=zfs-mount.service
 
     ui.info("Reloading systemd daemon and enabling sentry units…");
     systemctl(Duration::from_secs(5))?.run(&["daemon-reload"], None)?;
-    systemctl(Duration::from_secs(5))?.run(
-        &["enable", USB_MOUNT_UNIT, "beskar-unlock.service"],
-        None,
-    )?;
+    systemctl(Duration::from_secs(5))?
+        .run(&["enable", USB_MOUNT_UNIT, "beskar-unlock.service"], None)?;
     Ok(())
 }
 

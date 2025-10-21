@@ -59,7 +59,9 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
             root
         }
         Err(_) => {
-            ui.warn("Unable to trace the encryption root; proceeding directly against the dataset.");
+            ui.warn(
+                "Unable to trace the encryption root; proceeding directly against the dataset.",
+            );
             dataset.to_string()
         }
     };
@@ -73,6 +75,10 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
     // ------------------------------------------------------------------------
     const MAX_ATTEMPTS: usize = 3;
     let mut lockout = Lockout::new();
+    let mut usb_available = true;
+    let mut logged_usb_source = false;
+    let fallback_enabled = cfg.fallback.enabled;
+    let mut fallback_primed = false;
 
     for attempt in 1..=MAX_ATTEMPTS {
         ui.info(&format!(
@@ -81,17 +87,71 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
         ));
         timing.pace(Pace::Info);
 
-        let (key_material, origin) =
-            match obtain_key_material(ui, timing, cfg, &enc_root, attempt == 1) {
-                Ok(pair) => pair,
-                Err(err) => {
+        let (key_material, origin) = if usb_available {
+            match load_usb_key_material(ui, cfg) {
+                Ok(bytes) => {
+                    if !logged_usb_source {
+                        audit_log("UNLOCK_SOURCE", "Using USB key material");
+                        logged_usb_source = true;
+                    }
+                    (bytes, KeyOrigin::Usb)
+                }
+                Err(usb_err) => {
+                    audit_log("UNLOCK_USB_UNAVAILABLE", &format!("reason={}", usb_err));
+                    usb_available = false;
+                    if !fallback_enabled {
+                        ui.error(&format!("Unable to obtain key material ({}).", usb_err));
+                        audit_log("UNLOCK_KEY_FETCH_FAIL", &usb_err.to_string());
+                        return Err(usb_err);
+                    }
+                    ui.warn(&format!(
+                        "USB key unavailable ({}); invoking the fallback passphrase ritual.",
+                        usb_err
+                    ));
+                    timing.pace(Pace::Prompt);
+                    let passphrase = match prompt_fallback_passphrase(ui, timing, cfg, &enc_root) {
+                        Ok(pass) => pass,
+                        Err(fallback_err) => {
+                            let err = anyhow!(
+                                "USB key unavailable ({}) and fallback failed ({})",
+                                usb_err,
+                                fallback_err
+                            );
+                            ui.error(&format!("Unable to obtain key material ({}).", err));
+                            audit_log("UNLOCK_KEY_FETCH_FAIL", &err.to_string());
+                            return Err(err);
+                        }
+                    };
+                    fallback_primed = true;
+                    audit_log("UNLOCK_FALLBACK_USED", "Fallback passphrase requested");
+                    (passphrase, KeyOrigin::Passphrase)
+                }
+            }
+        } else if fallback_enabled {
+            if !fallback_primed {
+                ui.warn("USB key rejected; invoking fallback passphrase ritual.");
+                fallback_primed = true;
+            }
+            timing.pace(Pace::Prompt);
+            let passphrase = match prompt_fallback_passphrase(ui, timing, cfg, &enc_root) {
+                Ok(pass) => pass,
+                Err(fallback_err) => {
+                    let err = anyhow!("Fallback passphrase prompt failed ({})", fallback_err);
                     ui.error(&format!("Unable to obtain key material ({}).", err));
                     audit_log("UNLOCK_KEY_FETCH_FAIL", &err.to_string());
                     return Err(err);
                 }
             };
+            audit_log("UNLOCK_FALLBACK_USED", "Fallback passphrase requested");
+            (passphrase, KeyOrigin::Passphrase)
+        } else {
+            let err = anyhow!("No key material sources remain for {}", enc_root);
+            ui.error(&err.to_string());
+            audit_log("UNLOCK_KEY_FETCH_FAIL", &err.to_string());
+            return Err(err);
+        };
 
-        match zfs.load_key(&enc_root, &key_material) {
+        match zfs.load_key(&enc_root, &key_material[..]) {
             Ok(_) => {
                 ui.success(&format!(
                     "Key accepted. Encryption root {} now stands unlocked.",
@@ -111,9 +171,22 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
                     &format!("Attempt {} failed for {}: {}", attempt, enc_root, e),
                 );
 
+                let mut trigger_fallback = false;
+                if matches!(origin, KeyOrigin::Usb) && fallback_enabled {
+                    audit_log(
+                        "UNLOCK_USB_REJECTED",
+                        &format!("{} rejected USB key: {}", enc_root, e),
+                    );
+                    usb_available = false;
+                    trigger_fallback = true;
+                }
+
                 if attempt < MAX_ATTEMPTS {
                     lockout.register_failure(ui, timing);
                     lockout.wait_if_needed(ui, timing);
+                    if trigger_fallback {
+                        continue;
+                    }
                 }
             }
         }
@@ -140,48 +213,6 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
 enum KeyOrigin {
     Usb,
     Passphrase,
-}
-
-fn obtain_key_material(
-    ui: &UX,
-    timing: &Timing,
-    cfg: &ConfigFile,
-    enc_root: &str,
-    first_attempt: bool,
-) -> Result<(Zeroizing<Vec<u8>>, KeyOrigin)> {
-    match load_usb_key_material(ui, cfg) {
-        Ok(bytes) => {
-            if first_attempt {
-                audit_log("UNLOCK_SOURCE", "Using USB key material");
-            }
-            Ok((bytes, KeyOrigin::Usb))
-        }
-        Err(usb_err) => {
-            audit_log("UNLOCK_USB_UNAVAILABLE", &format!("reason={}", usb_err));
-
-            if !cfg.fallback.enabled {
-                return Err(usb_err);
-            }
-
-            ui.warn(&format!(
-                "USB key unavailable ({}); invoking the fallback passphrase ritual.",
-                usb_err
-            ));
-            timing.pace(Pace::Prompt);
-
-            let passphrase =
-                prompt_fallback_passphrase(ui, timing, cfg, enc_root).map_err(|fallback_err| {
-                    anyhow!(
-                        "USB key unavailable ({}) and fallback failed ({})",
-                        usb_err,
-                        fallback_err
-                    )
-                })?;
-
-            audit_log("UNLOCK_FALLBACK_USED", "Fallback passphrase requested");
-            Ok((passphrase, KeyOrigin::Passphrase))
-        }
-    }
 }
 
 fn load_usb_key_material(ui: &UX, cfg: &ConfigFile) -> Result<Zeroizing<Vec<u8>>> {
