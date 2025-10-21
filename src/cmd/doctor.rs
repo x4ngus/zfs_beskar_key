@@ -190,6 +190,89 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
         .cloned()
         .unwrap_or_else(|| "rpool/ROOT".to_string());
 
+    let zfs_timeout = Duration::from_secs(cfg.crypto.timeout_secs.max(1));
+    let zfs_client = cfg
+        .policy
+        .zfs_path
+        .as_ref()
+        .map(|p| Zfs::with_path(p, zfs_timeout))
+        .unwrap_or_else(|| Zfs::discover(zfs_timeout));
+
+    let mut primary_encryption_root = primary_dataset.clone();
+    match zfs_client.as_ref() {
+        Ok(client) => match client.encryption_root(&primary_dataset) {
+            Ok(root) => {
+                if root != primary_dataset {
+                    let detail = format!(
+                        "{} anchored at encryption root {}",
+                        primary_dataset, root
+                    );
+                    if cfg.policy.datasets.first().map(|d| d != &root).unwrap_or(true) {
+                        cfg.policy.datasets.retain(|d| d != &root);
+                        cfg.policy.datasets.insert(0, root.clone());
+                        match persist_config(&cfg) {
+                            Ok(_) => log_entry(
+                                &mut report,
+                                ui,
+                                timing,
+                                "Encryption root",
+                                Status::Fixed,
+                                format!("{} (policy realigned)", detail),
+                            ),
+                            Err(err) => log_entry(
+                                &mut report,
+                                ui,
+                                timing,
+                                "Encryption root",
+                                Status::Warn,
+                                format!("{} (failed to persist: {})", detail, err),
+                            ),
+                        }
+                    } else {
+                        log_entry(
+                            &mut report,
+                            ui,
+                            timing,
+                            "Encryption root",
+                            Status::Pass,
+                            detail.clone(),
+                        );
+                    }
+                    primary_encryption_root = root;
+                } else {
+                    log_entry(
+                        &mut report,
+                        ui,
+                        timing,
+                        "Encryption root",
+                        Status::Pass,
+                        format!("Encryption root confirmed as {}", root),
+                    );
+                    primary_encryption_root = root;
+                }
+            }
+            Err(err) => log_entry(
+                &mut report,
+                ui,
+                timing,
+                "Encryption root",
+                Status::Warn,
+                format!(
+                    "Unable to resolve encryption root for {}: {}",
+                    primary_dataset, err
+                ),
+            ),
+        },
+        Err(err) => log_entry(
+            &mut report,
+            ui,
+            timing,
+            "Encryption root",
+            Status::Warn,
+            format!("Unable to initialize zfs client: {}", err),
+        ),
+    }
+
     let binary_path = match determine_binary_path(Some(&cfg)) {
         Ok(path) => path,
         Err(err) => {
@@ -385,7 +468,7 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
             format!("{} ready", DRACUT_MODULE_DIR),
         );
     } else {
-        match install_dracut_module(&primary_dataset, config_path, &binary_path, ui) {
+        match install_dracut_module(&primary_encryption_root, config_path, &binary_path, ui) {
             Ok(_) => {
                 need_dracut = true;
                 log_entry(
@@ -545,22 +628,14 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     // ---------------------------------------------------------------------
     // Dataset sanity via zfs
     // ---------------------------------------------------------------------
-    let zfs_timeout = Duration::from_secs(cfg.crypto.timeout_secs.max(1));
-    let zfs = cfg
-        .policy
-        .zfs_path
-        .as_ref()
-        .map(|p| Zfs::with_path(p, zfs_timeout))
-        .unwrap_or_else(|| Zfs::discover(zfs_timeout));
-
-    match zfs.and_then(|client| client.is_encrypted(&primary_dataset)) {
+    match zfs_client.and_then(|client| client.is_encrypted(&primary_encryption_root)) {
         Ok(true) => log_entry(
             &mut report,
             ui,
             timing,
             "Dataset encryption",
             Status::Pass,
-            format!("{} is encrypted", primary_dataset),
+            format!("{} is encrypted", primary_encryption_root),
         ),
         Ok(false) => log_entry(
             &mut report,
@@ -568,7 +643,7 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
             timing,
             "Dataset encryption",
             Status::Warn,
-            format!("{} reports encryption=off", primary_dataset),
+            format!("{} reports encryption=off", primary_encryption_root),
         ),
         Err(err) => log_entry(
             &mut report,

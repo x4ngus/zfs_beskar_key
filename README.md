@@ -117,7 +117,7 @@ sudo /usr/local/bin/zfs_beskar_key auto-unlock --dataset=rpool/ROOT --config=/et
 
 ## Project Details
 
-- **Current release:** v1.5.0
+- **Current release:** v1.6.0
 - **License:** MIT (see `LICENSE`)
 - **Author:** Angus J.
 

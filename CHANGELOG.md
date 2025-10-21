@@ -2,6 +2,25 @@
 
 ---
 
+## v1.6.0 — Beskar Rekey
+**Date:** 2025-10-21  
+**Codename:** *Forge Recall*
+
+### Highlights
+
+- **Encryption-root awareness**  
+  - `init`, `doctor`, `repair`, and systemd units now resolve the true encryption root before forging keys, provisioning dracut hooks, or templating services. No more `rpool/ROOT` defaults that miss the actual lock authority.
+- **Safe re-keying workflow**  
+  - The forge applies the new raw key material to ZFS first, rolls back on failure, and only then writes the USB hex file—keeping the dataset consistent even if the USB token is swapped mid-flow.
+- **Boot fallback resilience**  
+  - Auto-unlock now promotes the passphrase ritual automatically when the USB key is missing or rejected, preserving unattended boot while keeping recovery paths online.
+
+### Fixes & Maintenance
+
+- Dracut modules carry `systemd-ask-password` into initramfs for passphrase prompts.
+- `zfs_beskar_key doctor` repairs legacy configs by reordering `policy.datasets` around the encryption root and reinstalls the module in-place.
+- Systemd unit templates align `auto-unlock` with the canonical root dataset to avoid boot-time key mismatches.
+
 ## v1.5.0 — Lean Beskar
 **Date:** 2025-10-22  
 **Codename:** *Tribute Sync*

@@ -5,6 +5,7 @@
 use crate::cmd::Cmd;
 use crate::config::ConfigFile;
 use crate::ui::UX;
+use crate::zfs::Zfs;
 use anyhow::{anyhow, Context, Result};
 use std::fs::{self, File};
 use std::io::Write;
@@ -54,6 +55,43 @@ WantedBy=local-fs-pre.target
         .cloned()
         .unwrap_or_else(|| "rpool/ROOT".to_string());
 
+    let unlock_dataset = {
+        let timeout = Duration::from_secs(cfg.crypto.timeout_secs.max(1));
+        let zfs_client = if let Some(path) = &cfg.policy.zfs_path {
+            Zfs::with_path(path, timeout)
+        } else {
+            Zfs::discover(timeout)
+        };
+        match zfs_client {
+            Ok(client) => match client.encryption_root(&dataset) {
+                Ok(root) if !root.trim().is_empty() => {
+                    if root != dataset {
+                        ui.info(&format!(
+                            "Systemd unlock unit aligned to encryption root {} (requested {}).",
+                            root, dataset
+                        ));
+                    }
+                    root
+                }
+                Ok(_) => dataset.clone(),
+                Err(err) => {
+                    ui.warn(&format!(
+                        "Unable to resolve encryption root for {} ({}). Using original dataset.",
+                        dataset, err
+                    ));
+                    dataset.clone()
+                }
+            },
+            Err(err) => {
+                ui.warn(&format!(
+                    "Unable to initialize zfs client for unlock unit ({}). Using original dataset.",
+                    err
+                ));
+                dataset.clone()
+            }
+        }
+    };
+
     let unlock_content = format!(
         r#"[Unit]
 Description=Unlock ZFS dataset with BESKAR USB key
@@ -85,7 +123,7 @@ ExecStart={binary} auto-unlock --config=/etc/zfs-beskar.toml --dataset={dataset}
 [Install]
 WantedBy=zfs-mount.service
 "#,
-        dataset = dataset,
+        dataset = unlock_dataset,
         binary = binary,
         mount_unit = USB_MOUNT_UNIT
     );
