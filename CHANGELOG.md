@@ -2,6 +2,28 @@
 
 ---
 
+## v1.5.0 — Lean Beskar
+**Date:** 2025-10-22  
+**Codename:** *Tribute Sync*
+
+### Highlights
+
+- **Lean dependency set**  
+  - Removed unused crates (`serde_json`, `colored`, `tracing`, `qrcodegen`, etc.) for a smaller build and reduced supply-chain exposure.
+- **Focused UX pacing**  
+  - Simplified the timing layer and UI helpers so interactive flows stay responsive without dormant debug hooks.
+- **First-time operator guide**  
+  - Rebuilt the README around the Tribute ▸ Temper ▸ Drill ▸ Diagnose ▸ Deploy cadence, leading new users through installation, rehearsal, and deployment.
+
+### Fixes & Maintenance
+
+- Tightened test utilities to align with the streamlined ZFS trait.
+- Trimmed dead helpers in atomic write utilities and ZFS wrappers.
+- Renamed the USB mount unit to `run-beskar.mount`, eliminating systemd `bad unit file setting` errors during boot.
+- Doctor now re-verifies Beskar units with `systemd-analyze` and auto-reinstalls them when verification fails, guarding unattended boots.
+
+---
+
 ## v1.4.0 — Beskar Keepsakes
 **Date:** 2025-10-21  
 **Codename:** *Fallback Mandate*

@@ -10,6 +10,7 @@ mod util;
 mod zfs;
 
 use crate::config::ConfigFile;
+use crate::util::binary::determine_binary_path;
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use rand::rngs::OsRng;
@@ -106,7 +107,7 @@ fn main() -> Result<()> {
     let cfg_path = Path::new(&cli.config);
     if !cfg_path.exists() {
         ui.warn(&format!(
-            "No config found at {} — creating default template.",
+            "Forge ledger missing at {} — I will inscribe a starter creed.",
             cfg_path.display()
         ));
         let default_cfg = r#"[crypto]
@@ -117,6 +118,7 @@ key_hex_path = "/run/beskar/key.hex"
 
 [policy]
 zfs_path = "/sbin/zfs"
+binary_path = "/usr/local/bin/zfs_beskar_key"
 datasets = ["rpool/ROOT"]
 
 [fallback]
@@ -131,7 +133,7 @@ askpass_path = "/usr/bin/systemd-ask-password"
         fs::set_permissions(cfg_path, fs::Permissions::from_mode(0o600))
             .context("set config permissions")?;
         ui.info(&format!(
-            "Default config written to {} — review before next reboot.",
+            "Template etched at {}. Inspect every value before the next muster.",
             cfg_path.display()
         ));
     }
@@ -190,7 +192,7 @@ fn dispatch_command(
             let mut key = Zeroizing::new([0u8; 32]);
             OsRng.fill_bytes(&mut *key);
             println!("{}", hex::encode(&key[..]));
-            ui.success("Key forged. This is the Way.");
+            ui.success("Raw beskar drawn into key form. This is the Way.");
             timing.pace(Pace::Prompt);
         }
 
@@ -209,7 +211,7 @@ fn dispatch_command(
             };
             let enc_root = determine_encryption_root(&zfs, &dataset, ui);
             zfs.unload_key(&enc_root)?;
-            ui.success(&format!("Vault sealed for {}.", enc_root));
+            ui.success(&format!("Vault sealed tight around {}.", enc_root));
             timing.pace(Pace::Critical);
         }
 
@@ -223,13 +225,14 @@ fn dispatch_command(
         }
 
         Commands::InstallUnits => {
-            cmd::repair::install_units(ui, cfg)?;
-            ui.success("Systemd units installed. This is the Way.");
+            let binary_path = determine_binary_path(Some(cfg))?;
+            cmd::repair::install_units(ui, cfg, &binary_path)?;
+            ui.success("Systemd sentries posted. This is the Way.");
             timing.pace(Pace::Prompt);
         }
 
         Commands::SelfTest => {
-            ui.info("Running BESKAR self-test…");
+            ui.info("Initiating beskar self-test sequence…");
             let dataset = resolve_dataset(&cli.dataset, cfg)?;
             let timeout = Duration::from_secs(cfg.crypto.timeout_secs.max(1));
             let zfs = if let Some(path) = &cfg.policy.zfs_path {
@@ -238,18 +241,21 @@ fn dispatch_command(
                 zfs::Zfs::discover(timeout)?
             };
             let enc_root = zfs.encryption_root(&dataset).unwrap_or(dataset.clone());
-            ui.info(&format!("Encryption root: {}", enc_root));
+            ui.info(&format!("Encryption root confirmed as {}.", enc_root));
             let _ = zfs.unload_key(&enc_root);
             if !zfs.is_unlocked(&enc_root)? {
-                ui.info("Key unloaded successfully.");
+                ui.info("Key withdrawn from memory space.");
             }
             match cmd::unlock::run_unlock(ui, timing, cfg, &enc_root) {
                 Ok(_) => {
-                    ui.success("Self-test PASSED. Auto-unlock logic verified.");
+                    ui.success("Self-test passed; the auto-unlock path holds.");
                     timing.pace(Pace::Prompt);
                 }
                 Err(e) => {
-                    ui.error(&format!("Self-test FAILED: {}", e));
+                    ui.error(&format!(
+                        "Self-test failed ({}). Inspect the forge logs and remediate.",
+                        e
+                    ));
                     timing.pace(Pace::Error);
                 }
             }
@@ -293,28 +299,11 @@ fn dispatch_menu_choice(
         menu::MenuChoice::VaultDrill => {
             cmd::simulate::run_vault_drill(ui, timing, cfg)?;
         }
-        menu::MenuChoice::Status => {
-            let dataset = resolve_dataset(&cli.dataset, cfg)?;
-            let timeout = Duration::from_secs(cfg.crypto.timeout_secs.max(1));
-            let zfs = if let Some(path) = &cfg.policy.zfs_path {
-                zfs::Zfs::with_path(path, timeout)?
-            } else {
-                zfs::Zfs::discover(timeout)?
-            };
-            let encrypted = zfs.is_encrypted(&dataset).unwrap_or(false);
-            let unlocked = zfs.is_unlocked(&dataset).unwrap_or(false);
-            let enc_root = zfs.encryption_root(&dataset).unwrap_or(dataset.clone());
-            ui.info(&format!(
-                "Dataset: {}\n- Encryption root: {}\n- Encrypted: {}\n- Unlocked: {}",
-                dataset, enc_root, encrypted, unlocked
-            ));
-            timing.pace(Pace::Info);
-        }
         menu::MenuChoice::Doctor => {
             cmd::doctor::run_doctor(ui, timing)?;
         }
         menu::MenuChoice::Quit => {
-            ui.info("Exiting console.");
+            ui.info("Forge console banked. Return with new orders.");
             std::process::exit(0);
         }
     }
@@ -341,17 +330,17 @@ fn determine_encryption_root(zfs: &impl ZfsCryptoOps, dataset: &str, ui: &UX) ->
         Ok(root) => {
             if root != dataset {
                 ui.info(&format!(
-                    "Dataset {} inherits encryption from root {}.",
+                    "Dataset {} draws its ward from encryption root {}.",
                     dataset, root
                 ));
             } else {
-                ui.info(&format!("Encryption root identified as {}.", root));
+                ui.info(&format!("Encryption root stands as {}.", root));
             }
             root
         }
         Err(e) => {
             ui.warn(&format!(
-                "Unable to determine encryption root for {}: {}. Using dataset directly.",
+                "Unable to read the encryption lineage for {} ({}). Proceeding against the dataset directly.",
                 dataset, e
             ));
             dataset.to_string()
@@ -359,31 +348,26 @@ fn determine_encryption_root(zfs: &impl ZfsCryptoOps, dataset: &str, ui: &UX) ->
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 trait ZfsCryptoOps {
-    fn is_unlocked(&self, dataset: &str) -> Result<bool>;
     fn encryption_root(&self, dataset: &str) -> Result<String>;
-    fn load_key(&self, dataset: &str, key: &[u8]) -> Result<()>;
 }
 
 impl ZfsCryptoOps for zfs::Zfs {
-    fn is_unlocked(&self, dataset: &str) -> Result<bool> {
-        zfs::Zfs::is_unlocked(self, dataset)
-    }
-
     fn encryption_root(&self, dataset: &str) -> Result<String> {
         zfs::Zfs::encryption_root(self, dataset)
     }
+}
 
-    fn load_key(&self, dataset: &str, key: &[u8]) -> Result<()> {
-        zfs::Zfs::load_key(self, dataset, key)
-    }
+#[cfg(test)]
+trait TestZfsCryptoOps: ZfsCryptoOps {
+    fn is_unlocked(&self, dataset: &str) -> Result<bool>;
+    fn load_key(&self, dataset: &str, key: &[u8]) -> Result<()>;
 }
 
 // Auto-unlock flow
 #[cfg(test)]
 fn auto_unlock_with(
-    zfs: &impl ZfsCryptoOps,
+    zfs: &impl TestZfsCryptoOps,
     ui: &UX,
     cfg: &ConfigFile,
     dataset: &str,
@@ -394,7 +378,7 @@ fn auto_unlock_with(
         Ok(state) => state,
         Err(e) => {
             ui.warn(&format!(
-                "Unable to determine current keystatus for {}: {}. Assuming locked.",
+                "Keystatus for {} obscured ({}). Assuming it remains locked.",
                 enc_root, e
             ));
             false
@@ -402,7 +386,7 @@ fn auto_unlock_with(
     };
     if unlocked {
         ui.info(&format!(
-            "Encryption root {} already unlocked. Running USB key self-test…",
+            "Encryption root {} already stands open. Initiating USB key self-test…",
             enc_root
         ));
     }
@@ -417,7 +401,9 @@ fn auto_unlock_with(
             "USB key malformed: expected 64 hex chars, found {}.",
             cleaned.len()
         ));
-        ui.warn("Tip: regenerate with `openssl rand -hex 32 | sudo tee /run/beskar/key.hex`");
+        ui.warn(
+            "Forge a new hex inscription with `openssl rand -hex 32 | sudo tee /run/beskar/key.hex`.",
+        );
         return Err(anyhow!(
             "USB key integrity check failed — malformed or truncated: {}",
             usb_path
@@ -433,30 +419,32 @@ fn auto_unlock_with(
 
     if let Some(expected_hash) = cfg.usb.expected_sha256.as_ref() {
         if !actual_hash.eq_ignore_ascii_case(expected_hash) {
-            ui.error("❌ USB key checksum mismatch!");
+            ui.error("USB key checksum mismatch detected.");
             ui.warn(&format!(
                 "Expected: {}\nFound:    {}",
                 expected_hash, actual_hash
             ));
             return Err(anyhow!("USB key checksum mismatch"));
         }
-        ui.info("✅ USB key checksum verified (SHA-256 match).");
+        ui.info("USB key checksum verified (SHA-256 match).");
     } else {
-        ui.warn("No expected SHA-256 in config.usb.expected_sha256 — skipping authenticity check.");
+        ui.warn(
+            "No reference SHA-256 in config.usb.expected_sha256 — authenticity check skipped.",
+        );
     }
 
     if !unlocked {
         ui.info(&format!(
-            "Attempting unlock of encryption root {} using verified USB key…",
+            "Attempting to unlock {} with the verified tribute…",
             enc_root
         ));
         zfs.load_key(&enc_root, &raw_key_bytes)?;
         ui.success(&format!(
-            "Key accepted from USB. {} unlocked. This is the Way.",
+            "Key accepted from the tribute. {} now stands unlocked. This is the Way.",
             enc_root
         ));
     } else {
-        ui.success("Self-test complete: USB key valid and verified.");
+        ui.success("Self-test complete; the beskar key holds true.");
     }
 
     Ok(())
@@ -495,20 +483,22 @@ mod tests {
     }
 
     impl ZfsCryptoOps for MockZfs {
-        fn is_unlocked(&self, dataset: &str) -> Result<bool> {
-            self.is_unlocked_calls
-                .lock()
-                .unwrap()
-                .push(dataset.to_string());
-            Ok(self.unlocked)
-        }
-
         fn encryption_root(&self, dataset: &str) -> Result<String> {
             self.encryption_queries
                 .lock()
                 .unwrap()
                 .push(dataset.to_string());
             Ok(self.root.clone())
+        }
+    }
+
+    impl TestZfsCryptoOps for MockZfs {
+        fn is_unlocked(&self, dataset: &str) -> Result<bool> {
+            self.is_unlocked_calls
+                .lock()
+                .unwrap()
+                .push(dataset.to_string());
+            Ok(self.unlocked)
         }
 
         fn load_key(&self, dataset: &str, _key: &[u8]) -> Result<()> {
@@ -527,6 +517,7 @@ mod tests {
             policy: Policy {
                 datasets: vec!["rpool/ROOT/ubuntu".into()],
                 zfs_path: None,
+                binary_path: None,
                 allow_root: false,
             },
             crypto: CryptoCfg { timeout_secs: 5 },

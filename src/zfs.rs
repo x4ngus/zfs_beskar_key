@@ -50,16 +50,6 @@ impl Zfs {
         cmd.run(args, input)
     }
 
-    #[allow(dead_code)]
-    /// Returns the dataset's keyformat (e.g. "passphrase", "hex", "none").
-    pub fn keyformat(&self, dataset: &str) -> Result<String> {
-        let out = self.run(&["get", "-H", "-o", "value", "keyformat", dataset], None)?;
-        if out.status != 0 {
-            return Err(anyhow!("zfs get keyformat failed: {}", out.stderr));
-        }
-        Ok(out.stdout.trim().to_string())
-    }
-
     /// Returns true if dataset encryption is enabled.
     pub fn is_encrypted(&self, dataset: &str) -> Result<bool> {
         let out = self.run(&["get", "-H", "-o", "value", "encryption", dataset], None)?;

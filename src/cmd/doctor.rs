@@ -6,12 +6,13 @@ use crate::cmd::init::{
     install_dracut_module, rebuild_initramfs, DRACUT_MODULE_DIR, DRACUT_SCRIPT_NAME,
     DRACUT_SETUP_NAME,
 };
-use crate::cmd::repair;
+use crate::cmd::repair::{self, USB_MOUNT_UNIT};
 use crate::cmd::Cmd;
 use crate::config::ConfigFile;
 use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
+use crate::util::binary::determine_binary_path;
 use crate::zfs::Zfs;
 use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
@@ -22,6 +23,7 @@ use std::time::Duration;
 
 const CONFIG_PATH: &str = "/etc/zfs-beskar.toml";
 const KEY_RUNTIME_DIR: &str = "/run/beskar";
+const UNLOCK_UNIT_NAME: &str = "beskar-unlock.service";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Status {
@@ -32,12 +34,12 @@ enum Status {
 }
 
 impl Status {
-    fn glyph(self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
-            Status::Pass => "✴",
-            Status::Fixed => "✷",
-            Status::Warn => "⚠",
-            Status::Fail => "✖",
+            Status::Pass => "[PASS]",
+            Status::Fixed => "[FIXED]",
+            Status::Warn => "[WARN]",
+            Status::Fail => "[FAIL]",
         }
     }
 }
@@ -48,9 +50,16 @@ struct ReportEntry {
     detail: String,
 }
 
+enum UnitVerification {
+    Pass(String),
+    Fixed(String),
+    Warn(String),
+    Fail(String),
+}
+
 pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     ui.banner();
-    ui.phase("Holoforge Diagnostics // Clan Systems Report");
+    ui.phase("Armorer's Diagnostics // Clan Systems Report");
 
     let mut report: Vec<ReportEntry> = Vec::new();
     let mut need_dracut = false;
@@ -180,6 +189,57 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
         .first()
         .cloned()
         .unwrap_or_else(|| "rpool/ROOT".to_string());
+
+    let binary_path = match determine_binary_path(Some(&cfg)) {
+        Ok(path) => path,
+        Err(err) => {
+            log_entry(
+                &mut report,
+                ui,
+                timing,
+                "Binary path",
+                Status::Fail,
+                format!("Unable to resolve zfs_beskar_key binary: {}", err),
+            );
+            summarize(&report, ui, timing)?;
+            return Err(anyhow!("Missing zfs_beskar_key binary"));
+        }
+    };
+    let binary_path_string = binary_path.to_string_lossy().to_string();
+    match cfg.policy.binary_path.as_deref() {
+        Some(existing) if existing == binary_path_string => log_entry(
+            &mut report,
+            ui,
+            timing,
+            "Binary path",
+            Status::Pass,
+            format!("Using {}", binary_path_string),
+        ),
+        _ => {
+            cfg.policy.binary_path = Some(binary_path_string.clone());
+            match persist_config(&cfg) {
+                Ok(_) => {
+                    need_dracut = true;
+                    log_entry(
+                        &mut report,
+                        ui,
+                        timing,
+                        "Binary path",
+                        Status::Fixed,
+                        format!("Recorded {}", binary_path_string),
+                    );
+                }
+                Err(err) => log_entry(
+                    &mut report,
+                    ui,
+                    timing,
+                    "Binary path",
+                    Status::Warn,
+                    format!("Failed to record {}: {}", binary_path_string, err),
+                ),
+            }
+        }
+    }
 
     // ---------------------------------------------------------------------
     // Verify key material
@@ -325,7 +385,7 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
             format!("{} ready", DRACUT_MODULE_DIR),
         );
     } else {
-        match install_dracut_module(&primary_dataset, config_path, ui) {
+        match install_dracut_module(&primary_dataset, config_path, &binary_path, ui) {
             Ok(_) => {
                 need_dracut = true;
                 log_entry(
@@ -354,16 +414,44 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     // Systemd units
     // ---------------------------------------------------------------------
     if repair::units_exist() {
-        log_entry(
-            &mut report,
-            ui,
-            timing,
-            "Systemd units",
-            Status::Pass,
-            "beskar-usb.mount & beskar-unlock.service present.".to_string(),
-        );
+        match repair::unit_exec_matches(&binary_path) {
+            Ok(true) => log_entry(
+                &mut report,
+                ui,
+                timing,
+                "Systemd units",
+                Status::Pass,
+                format!("{} & beskar-unlock.service present.", USB_MOUNT_UNIT),
+            ),
+            Ok(false) => match repair::install_units(ui, &cfg, &binary_path) {
+                Ok(_) => log_entry(
+                    &mut report,
+                    ui,
+                    timing,
+                    "Systemd units",
+                    Status::Fixed,
+                    format!("Updated beskar-unlock ExecStart to {}.", binary_path_string),
+                ),
+                Err(err) => log_entry(
+                    &mut report,
+                    ui,
+                    timing,
+                    "Systemd units",
+                    Status::Fail,
+                    format!("Unable to refresh units: {}", err),
+                ),
+            },
+            Err(err) => log_entry(
+                &mut report,
+                ui,
+                timing,
+                "Systemd units",
+                Status::Warn,
+                format!("Unable to verify unit ExecStart: {}", err),
+            ),
+        }
     } else {
-        match repair::install_units(ui, &cfg) {
+        match repair::install_units(ui, &cfg, &binary_path) {
             Ok(_) => {
                 log_entry(
                     &mut report,
@@ -385,6 +473,41 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
                 );
             }
         }
+    }
+
+    match verify_systemd_units(ui, &cfg, &binary_path) {
+        UnitVerification::Pass(detail) => log_entry(
+            &mut report,
+            ui,
+            timing,
+            "Systemd verification",
+            Status::Pass,
+            detail,
+        ),
+        UnitVerification::Fixed(detail) => log_entry(
+            &mut report,
+            ui,
+            timing,
+            "Systemd verification",
+            Status::Fixed,
+            detail,
+        ),
+        UnitVerification::Warn(detail) => log_entry(
+            &mut report,
+            ui,
+            timing,
+            "Systemd verification",
+            Status::Warn,
+            detail,
+        ),
+        UnitVerification::Fail(detail) => log_entry(
+            &mut report,
+            ui,
+            timing,
+            "Systemd verification",
+            Status::Fail,
+            detail,
+        ),
     }
 
     match ensure_units_enabled(ui) {
@@ -495,10 +618,10 @@ fn log_entry(
     detail: String,
 ) {
     match status {
-        Status::Pass => ui.success(&format!("{} {}", status.glyph(), detail)),
-        Status::Fixed => ui.success(&format!("{} {}", status.glyph(), detail)),
-        Status::Warn => ui.warn(&format!("{} {}", status.glyph(), detail)),
-        Status::Fail => ui.error(&format!("{} {}", status.glyph(), detail)),
+        Status::Pass => ui.success(&format!("{} {}", status.label(), detail)),
+        Status::Fixed => ui.success(&format!("{} {}", status.label(), detail)),
+        Status::Warn => ui.warn(&format!("{} {}", status.label(), detail)),
+        Status::Fail => ui.error(&format!("{} {}", status.label(), detail)),
     }
     timing.pace(match status {
         Status::Pass | Status::Fixed => Pace::Info,
@@ -547,18 +670,70 @@ fn summarize(report: &[ReportEntry], ui: &UX, timing: &Timing) -> Result<()> {
     timing.pace(Pace::Info);
 
     if !warn_details.is_empty() {
-        ui.note(&format!("Warnings: {}", warn_details.join(" | ")));
+        ui.note(&format!("Warnings tallied: {}", warn_details.join(" | ")));
     }
     if !fail_details.is_empty() {
-        ui.warn(&format!("Failures: {}", fail_details.join(" | ")));
+        ui.warn(&format!("Failures demanding attention: {}", fail_details.join(" | ")));
     }
 
     if fails > 0 {
         Err(anyhow!("Diagnostics uncovered blocking issues"))
     } else {
-        ui.success("Diagnostics complete. This is the Way.");
+        ui.success("Diagnostics complete. The armour's story is recorded. This is the Way.");
         Ok(())
     }
+}
+
+fn verify_systemd_units(ui: &UX, cfg: &ConfigFile, binary_path: &Path) -> UnitVerification {
+    match run_unit_verification(&[USB_MOUNT_UNIT, UNLOCK_UNIT_NAME]) {
+        Ok(_) => UnitVerification::Pass("systemd-analyze verify clean for Beskar units.".to_string()),
+        Err(err) => {
+            let err_msg = err.to_string();
+            if err_msg.contains("systemd-analyze not found") {
+                return UnitVerification::Warn("systemd-analyze missing; skipping verification.".to_string());
+            }
+            match repair::install_units(ui, cfg, binary_path) {
+                Ok(_) => match run_unit_verification(&[USB_MOUNT_UNIT, UNLOCK_UNIT_NAME]) {
+                    Ok(_) => UnitVerification::Fixed(format!(
+                        "Reinstalled units after verification error: {}",
+                        err_msg
+                    )),
+                    Err(err2) => UnitVerification::Fail(format!(
+                        "systemd-analyze verify still failing: {}",
+                        err2
+                    )),
+                },
+                Err(install_err) => UnitVerification::Fail(format!(
+                    "Verification failed: {err_msg}; reinstall error: {install_err}"
+                )),
+            }
+        }
+    }
+}
+
+fn run_unit_verification(units: &[&str]) -> Result<()> {
+    let analyzer = systemd_analyze(Duration::from_secs(5))?;
+    for unit in units {
+        let output = analyzer.run(&["verify", unit], None)?;
+        if output.status != 0 {
+            let msg = if output.stderr.trim().is_empty() {
+                output.stdout.trim().to_string()
+            } else {
+                output.stderr.trim().to_string()
+            };
+            return Err(anyhow!("{} verification failed: {}", unit, msg));
+        }
+    }
+    Ok(())
+}
+
+fn systemd_analyze(timeout: Duration) -> Result<Cmd> {
+    for candidate in ["/bin/systemd-analyze", "/usr/bin/systemd-analyze"] {
+        if Path::new(candidate).exists() {
+            return Cmd::new_allowlisted(candidate, timeout);
+        }
+    }
+    Err(anyhow!("systemd-analyze not found"))
 }
 
 fn find_binary(candidates: &[&str]) -> Option<String> {
@@ -580,7 +755,7 @@ fn ensure_units_enabled(ui: &UX) -> Result<Option<String>> {
     let systemctl_path = find_binary(&["/bin/systemctl", "/usr/bin/systemctl"])
         .ok_or_else(|| anyhow!("systemctl not found on PATH"))?;
     let cmd = Cmd::new_allowlisted(systemctl_path.clone(), Duration::from_secs(5))?;
-    let usb = cmd.run(&["is-enabled", "beskar-usb.mount"], None)?;
+    let usb = cmd.run(&["is-enabled", USB_MOUNT_UNIT], None)?;
     let unlock = cmd.run(&["is-enabled", "beskar-unlock.service"], None)?;
 
     if usb.status == 0 && unlock.status == 0 {
@@ -588,7 +763,8 @@ fn ensure_units_enabled(ui: &UX) -> Result<Option<String>> {
     }
 
     repair::ensure_units_enabled(ui)?;
-    Ok(Some(
-        "Enabled beskar-usb.mount & beskar-unlock.service via systemctl.".to_string(),
-    ))
+    Ok(Some(format!(
+        "Enabled {} & beskar-unlock.service via systemctl.",
+        USB_MOUNT_UNIT
+    )))
 }

@@ -4,4 +4,5 @@
 
 pub mod atomic;
 pub mod audit;
+pub mod binary;
 pub mod lockout;

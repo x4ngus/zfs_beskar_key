@@ -20,6 +20,10 @@ pub struct Policy {
     #[serde(default)]
     pub zfs_path: Option<String>,
 
+    /// Optional explicit path to `zfs_beskar_key` binary
+    #[serde(default)]
+    pub binary_path: Option<String>,
+
     /// Allow root context execution (advanced users)
     #[serde(default)]
     pub allow_root: bool,

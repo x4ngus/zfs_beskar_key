@@ -31,11 +31,11 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
     timing.pace(Pace::Info);
 
     ui.info(&format!(
-        "Forged pool {} atop {}.",
+        "Ephemeral pool {} hammered atop {}.",
         sim.pool_name,
         sim.image_path.display()
     ));
-    ui.note("Sealing the vault to mimic a cold boot state…");
+    ui.note("Sealing the training vault to mimic a cold boot state…");
     sim.ensure_locked()?;
     timing.pace(Pace::Prompt);
 
@@ -44,10 +44,10 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
         Ok(_) => {
             let zfs = sim.zfs()?;
             if zfs.is_unlocked(&sim.dataset_name)? {
-                ui.success("Ephemeral vault unlocked — Beskar token validated.");
+                ui.success("Ephemeral vault unlocked — the beskar token proves its worth.");
                 audit_status(&zfs, &sim.dataset_name, ui);
             } else {
-                ui.warn("Vault status uncertain after simulation; check ZFS keystatus.");
+                ui.warn("Vault status uncertain after simulation; inspect `zfs keystatus` directly.");
             }
         }
         Err(err) => {
@@ -63,7 +63,7 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
         emit_reseal_remediation(ui, timing, base_cfg, &err);
         return Err(err);
     }
-    ui.success("Ephemeral vault sealed. Key removed from memory.");
+    ui.success("Ephemeral vault sealed; key withdrawn from memory.");
     timing.pace(Pace::Critical);
 
     ui.phase("Forge Cleanup // Dismantling Simulation");
@@ -89,9 +89,9 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
         ],
     );
     ui.note(
-        "If any step reports issues, rerun the forge with --force and inspect `/etc/zfs-beskar.toml.bak-*` for recovery.",
+        "If any step raises concerns, rerun the forge with --force and inspect `/etc/zfs-beskar.toml.bak-*` for recovery.",
     );
-    ui.success("Simulation complete. Real pools remain untouched. This is the Way.");
+    ui.success("Simulation complete. Your true pools remain untouched. This is the Way.");
     Ok(())
 }
 
@@ -203,6 +203,7 @@ impl VaultSimulation {
             policy: Policy {
                 datasets: vec![dataset_name.clone()],
                 zfs_path: Some(zfs_path.clone()),
+                binary_path: base_cfg.policy.binary_path.clone(),
                 allow_root: true,
             },
             crypto: CryptoCfg {
@@ -371,7 +372,7 @@ fn emit_preflight_remediation(
     ));
 
     ui.data_panel("Preflight Checklist", &checklist);
-    ui.note("Resolve the items above, then relaunch the Vault Drill to verify the forge.");
+    ui.note("Work through these items, then relaunch the vault drill to verify the forge.");
 }
 
 fn audit_status(zfs: &Zfs, dataset: &str, ui: &UX) {
@@ -381,7 +382,7 @@ fn audit_status(zfs: &Zfs, dataset: &str, ui: &UX) {
     match zfs.is_unlocked(dataset) {
         Ok(true) => ui.note("Keystatus: available (key is resident)."),
         Ok(false) => ui.note("Keystatus: locked (key removed)."),
-        Err(err) => ui.warn(&format!("Unable to query keystatus: {}", err)),
+        Err(err) => ui.warn(&format!("Unable to query keystatus ({}).", err)),
     }
 }
 
@@ -394,7 +395,7 @@ fn emit_unlock_remediation(ui: &UX, timing: &Timing, base_cfg: &ConfigFile, err:
         .unwrap_or_else(|| "<dataset>".to_string());
     let cfg_hint = base_cfg.path.as_path().to_string_lossy().to_string();
 
-    ui.error(&format!("Ephemeral unlock failed: {}", err));
+    ui.error(&format!("Ephemeral unlock attempt failed: {}", err));
     timing.pace(Pace::Error);
     ui.data_panel(
         "Unlock Remediation Checklist",
@@ -421,7 +422,7 @@ fn emit_unlock_remediation(ui: &UX, timing: &Timing, base_cfg: &ConfigFile, err:
             ("Review config", format!("sudo editor {}", cfg_hint)),
         ],
     );
-    ui.note("Once each item reports green, rerun the vault drill to confirm the forge is stable.");
+    ui.note("When each item reports green, rerun the vault drill to confirm the forge is stable.");
 }
 
 fn emit_reseal_remediation(ui: &UX, timing: &Timing, base_cfg: &ConfigFile, err: &anyhow::Error) {
@@ -432,7 +433,7 @@ fn emit_reseal_remediation(ui: &UX, timing: &Timing, base_cfg: &ConfigFile, err:
         .cloned()
         .unwrap_or_else(|| "<dataset>".to_string());
 
-    ui.error(&format!("Failed to reseal the ephemeral vault: {}", err));
+    ui.error(&format!("Reseal attempt on the ephemeral vault failed: {}", err));
     timing.pace(Pace::Error);
     ui.data_panel(
         "Reseal Troubleshooting",
@@ -449,5 +450,5 @@ fn emit_reseal_remediation(ui: &UX, timing: &Timing, base_cfg: &ConfigFile, err:
             ("Ensure dracut rebuild", "sudo dracut -f".to_string()),
         ],
     );
-    ui.note("If the dataset stays busy, stop services that depend on it, unload again, and rerun the forge drill.");
+    ui.note("If the dataset stays busy, silence dependent services, unload again, and rerun the forge drill.");
 }

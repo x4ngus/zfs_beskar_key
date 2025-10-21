@@ -111,9 +111,3 @@ pub fn atomic_write_toml<T: serde::Serialize>(path: &Path, value: &T, force: boo
     let s = toml::to_string_pretty(value).context("Serialize TOML failed")?;
     atomic_write_bytes(path, s.as_bytes(), 0o600, force)
 }
-
-/// Convenience: atomic write for key material (binary) with 0400 permissions.
-#[allow(dead_code)]
-pub fn atomic_write_key(path: &Path, key: &[u8], force: bool) -> Result<()> {
-    atomic_write_bytes(path, key, 0o400, force)
-}

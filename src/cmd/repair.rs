@@ -11,14 +11,23 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-const USB_UNIT_PATH: &str = "/etc/systemd/system/beskar-usb.mount";
-const UNLOCK_UNIT_PATH: &str = "/etc/systemd/system/beskar-unlock.service";
+pub const USB_MOUNT_UNIT: &str = "run-beskar.mount";
+pub const USB_UNIT_PATH: &str = "/etc/systemd/system/run-beskar.mount";
+pub const UNLOCK_UNIT_PATH: &str = "/etc/systemd/system/beskar-unlock.service";
 
-pub fn install_units(ui: &UX, cfg: &ConfigFile) -> Result<()> {
+pub fn install_units(ui: &UX, cfg: &ConfigFile, binary_path: &Path) -> Result<()> {
+    if !binary_path.exists() {
+        return Err(anyhow!(
+            "zfs_beskar_key binary not found at {}",
+            binary_path.display()
+        ));
+    }
+
     let sysd_path = "/etc/systemd/system";
-    let usb_unit = format!("{}/beskar-usb.mount", sysd_path);
+    let usb_unit = format!("{}/{}", sysd_path, USB_MOUNT_UNIT);
     let unlock_unit = format!("{}/beskar-unlock.service", sysd_path);
     let usb_uuid = get_usb_uuid()?;
+    let binary = binary_path.to_string_lossy().into_owned();
 
     let mount_content = format!(
         r#"[Unit]
@@ -49,8 +58,8 @@ WantedBy=local-fs-pre.target
         r#"[Unit]
 Description=Unlock ZFS dataset with BESKAR USB key
 DefaultDependencies=no
-After=beskar-usb.mount zfs-import-cache.service zfs-import.target
-Requires=beskar-usb.mount
+After={mount_unit} zfs-import-cache.service zfs-import.target
+Requires={mount_unit}
 Before=zfs-load-key.service zfs-mount.service local-fs.target
 
 [Service]
@@ -71,21 +80,23 @@ ReadWritePaths=/dev
 ReadOnlyPaths=/run/beskar
 TemporaryFileSystem=/tmp:ro
 UMask=0077
-ExecStart=/usr/local/bin/zfs_beskar_key auto-unlock --config=/etc/zfs-beskar.toml --dataset={dataset}
+ExecStart={binary} auto-unlock --config=/etc/zfs-beskar.toml --dataset={dataset}
 
 [Install]
 WantedBy=zfs-mount.service
 "#,
-        dataset = dataset
+        dataset = dataset,
+        binary = binary,
+        mount_unit = USB_MOUNT_UNIT
     );
 
     write_unit(&usb_unit, &mount_content)?;
     write_unit(&unlock_unit, &unlock_content)?;
 
-    ui.info("Reloading systemd daemon and enabling units…");
+    ui.info("Reloading systemd daemon and enabling sentry units…");
     systemctl(Duration::from_secs(5))?.run(&["daemon-reload"], None)?;
     systemctl(Duration::from_secs(5))?.run(
-        &["enable", "beskar-usb.mount", "beskar-unlock.service"],
+        &["enable", USB_MOUNT_UNIT, "beskar-unlock.service"],
         None,
     )?;
     Ok(())
@@ -93,14 +104,26 @@ WantedBy=zfs-mount.service
 
 pub fn ensure_units_enabled(ui: &UX) -> Result<()> {
     let enable = systemctl(Duration::from_secs(5))?;
-    enable.run(&["enable", "beskar-usb.mount"], None)?;
+    enable.run(&["enable", USB_MOUNT_UNIT], None)?;
     enable.run(&["enable", "beskar-unlock.service"], None)?;
-    ui.info("Systemd units enabled.");
+    ui.info("Systemd sentry units stand ready.");
     Ok(())
 }
 
 pub fn units_exist() -> bool {
     Path::new(USB_UNIT_PATH).exists() && Path::new(UNLOCK_UNIT_PATH).exists()
+}
+
+pub fn unit_exec_matches(binary_path: &Path) -> Result<bool> {
+    let expected = binary_path.to_string_lossy();
+    let content = fs::read_to_string(UNLOCK_UNIT_PATH)
+        .with_context(|| format!("read {}", UNLOCK_UNIT_PATH))?;
+    for line in content.lines() {
+        if line.trim_start().starts_with("ExecStart=") {
+            return Ok(line.contains(expected.as_ref()));
+        }
+    }
+    Ok(false)
 }
 
 fn write_unit(path: &str, content: &str) -> Result<()> {

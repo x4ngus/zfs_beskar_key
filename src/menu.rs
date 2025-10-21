@@ -2,8 +2,8 @@
 // src/menu.rs – Interactive console menu (discoverability & flow control)
 // ============================================================================
 
-use console::{style, Style};
-use dialoguer::{theme::ColorfulTheme, Select};
+use console::Style;
+use std::io::{self, Write};
 
 use crate::ui::{Pace, Timing, UX};
 
@@ -12,7 +12,6 @@ pub enum MenuChoice {
     Init,
     InitSafe,
     VaultDrill,
-    Status,
     Doctor,
     Quit,
 }
@@ -30,56 +29,119 @@ pub fn show_main_menu(ui: &UX, timing: &Timing) -> Option<MenuChoice> {
     // ------------------------------------------------------------------------
     // Theme setup — consistent with CLI look & feel
     // ------------------------------------------------------------------------
-    let theme = ColorfulTheme {
-        // Active / inactive items
-        active_item_style: Style::new().cyan().bold(),
-        inactive_item_style: Style::new().dim(),
-
-        // Prefixes: need StyledObject<String>, so convert &str → String
-        active_item_prefix: style("⟶".to_string()).cyan(),
-        inactive_item_prefix: style(" ".to_string()),
-
-        // Prompt style expects a plain Style, not a StyledObject
-        prompt_style: Style::new().yellow().bold(),
-
-        // Neutral list text
-        values_style: Style::new(),
-
-        ..Default::default()
-    };
-
     // ------------------------------------------------------------------------
     // Menu items
     // ------------------------------------------------------------------------
-    let options = vec![
-        "Temper Beskar Key            [Forge USB token]",
-        "Temper Beskar Key (Safe)     [Guided forge]",
-        "Vault Drill Simulation       [USB rehearsal]",
-        "Clan Status Scan             [Diagnostics]",
-        "Summon the Armorer           [Doctor checks]",
-        "Leave the Covert",
+    let entries = [
+        (
+            MenuChoice::Init,
+            "TEMPER THE TRIBUTE  —  Reforge the offered beskar key from first principles",
+            "The crucible ignites. Present the device and dataset without hesitation.",
+        ),
+        (
+            MenuChoice::InitSafe,
+            "TEMPER THE TRIBUTE (GUIDED)  —  Pause before each irreversible strike",
+            "We proceed in measured beats; confirm each action as I name it.",
+        ),
+        (
+            MenuChoice::VaultDrill,
+            "VAULT DRILL  —  Rehearse the unlock path within a holoforge simulation",
+            "Your clan trains safely here; follow the sequence and observe the results.",
+        ),
+        (
+            MenuChoice::Doctor,
+            "ARMORER'S AUDIT  —  Inspect defenses and prescribe repairs",
+            "I will walk the perimeter and call out any plates that ring hollow.",
+        ),
+        (
+            MenuChoice::Quit,
+            "BANK THE COALS  —  Withdraw from the forge console",
+            "The embers hold. Return when a new tribute is ready.",
+        ),
     ];
+    let motif = ["╳", "╂", "╋", "╂"];
+    let inner_width = crate::ui::BANNER_BODY_WIDTH.saturating_sub(2);
+    let frame_span = "═".repeat(crate::ui::BANNER_BODY_WIDTH + 2);
+    let frame_style = Style::new().color256(202).bold();
+    let divider_style = Style::new().color256(208).bold();
+    let divider_span = "═".repeat(crate::ui::BANNER_BODY_WIDTH + 2);
+    let header_inner = format!(
+        "{:^width$}",
+        "SELECT NEXT FORGE DIRECTIVE",
+        width = crate::ui::BANNER_BODY_WIDTH + 2
+    );
 
-    let selection = Select::with_theme(&theme)
-        .with_prompt("Choose your next forge action")
-        .items(&options)
-        .default(0)
-        .interact()
-        .unwrap_or(options.len() - 1);
+    println!("{}", frame_style.apply_to(format!("╔{}╗", frame_span)));
+    println!("{}", frame_style.apply_to(format!("║{}║", header_inner)));
+    println!("{}", divider_style.apply_to(format!("╠{}╣", divider_span)));
 
-    let choice = match selection {
-        0 => MenuChoice::Init,
-        1 => MenuChoice::InitSafe,
-        2 => MenuChoice::VaultDrill,
-        3 => MenuChoice::Status,
-        4 => MenuChoice::Doctor,
-        _ => MenuChoice::Quit,
-    };
+    let row_style = Style::new().color256(221).bold();
+    for (idx, (_choice, text, _ack)) in entries.iter().enumerate() {
+        let label = format!("{:>2}. {}", idx + 1, text);
+        let centered = format!("{:^width$}", label, width = inner_width);
+        let left_edge = frame_style.apply_to("║").to_string();
+        let right_edge = frame_style.apply_to("║").to_string();
+        let left_motif = Style::new()
+            .color256(208)
+            .bold()
+            .apply_to(motif[idx % motif.len()])
+            .to_string();
+        let right_motif = Style::new()
+            .color256(214)
+            .bold()
+            .apply_to(motif[(idx + 2) % motif.len()])
+            .to_string();
+        let body = row_style.apply_to(centered).to_string();
+        println!(
+            "{}{}{}{}{}",
+            left_edge, left_motif, body, right_motif, right_edge
+        );
+    }
 
-    ui.info(&format!(
-        "Operation queued: {}  ➤  Beskar discipline engaged.",
-        options[selection]
-    ));
+    println!("{}", frame_style.apply_to(format!("╚{}╝", frame_span)));
+    println!();
+
+    let mut selection: Option<MenuChoice> = None;
+    let mut selected_idx: Option<usize> = None;
+    while selection.is_none() {
+        print!(
+            "{}",
+            Style::new()
+                .color256(221)
+                .bold()
+                .apply_to("Directive [1-5 or Q to withdraw]: ")
+        );
+        let _ = io::stdout().flush();
+
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_err() {
+            ui.warn("Input unreadable — try again.");
+            continue;
+        }
+        let trimmed = input.trim();
+        if trimmed.eq_ignore_ascii_case("q") {
+            selection = Some(MenuChoice::Quit);
+            selected_idx = None;
+            break;
+        }
+        match trimmed.parse::<usize>() {
+            Ok(n) if (1..=entries.len()).contains(&n) => {
+                selection = Some(entries[n - 1].0.clone());
+                selected_idx = Some(n - 1);
+            }
+            _ => {
+                ui.warn("Invalid choice — choose a menu number or 'Q'.");
+            }
+        }
+    }
+
+    let choice = selection.unwrap_or(MenuChoice::Quit);
+
+    if let Some(idx) = selected_idx {
+        ui.info(entries[idx].2);
+    } else {
+        ui.info("The forge rests in silence until you bring another charge.");
+    }
     timing.pace(Pace::Prompt);
     Some(choice)
 }

@@ -22,6 +22,7 @@ use crate::config::{ConfigFile, CryptoCfg, Fallback, Policy, Usb};
 use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
+use crate::util::binary::determine_binary_path;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::collections::HashMap;
 
@@ -68,11 +69,15 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     ui.banner();
     begin_phase(
         ui,
-        "Forge Initialization // Tempering Beskar",
+        "Armorer's Preparation // Tempering Beskar",
         opts.confirm_each_phase,
     )?;
-    ui.info("Summoning the covert's forge to temper armour around your filesystem core.");
+    ui.info(
+        "You lay your beskar tribute before me; I will temper it into a ward for your dataset. Speak each detail as I call for it.",
+    );
     timing.pace(Pace::Info);
+
+    let binary_path = determine_binary_path(None)?;
 
     let dataset = opts
         .pool
@@ -104,7 +109,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     dismantle_mounts(&usb_partition, ui)?;
 
     ui.data_panel(
-        "Forge Ledger",
+        "Armorer's Ledger",
         &[
             ("Dataset", dataset.clone()),
             ("USB Disk", usb_disk.clone()),
@@ -116,7 +121,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     );
     timing.pace(Pace::Info);
 
-    begin_phase(ui, "Forge Survey // Inspect Alloy", opts.confirm_each_phase)?;
+    begin_phase(ui, "Material Survey // Inspect Alloy", opts.confirm_each_phase)?;
     report_usb_target(ui, &usb_disk);
     if usb_partition != usb_disk {
         report_usb_target(ui, &usb_partition);
@@ -127,7 +132,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
     if effective_force {
         ui.warn(&format!(
-            "Force flag detected — remelting {} so a fresh Beskar token can be poured.",
+            "Override accepted. I will scour {} clean so the tribute accepts a new inscription.",
             usb_disk
         ));
         wipe_usb_token(&usb_disk, &usb_partition, ui)?;
@@ -145,15 +150,15 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
                         return Err(err);
                     }
 
-                    ui.note("Safe mode: Beskar token is not prepared as expected.");
+                    ui.note("Safe mode: this ingot bears the wrong crest. Direct the next strike.");
                     let theme = ColorfulTheme::default();
                     let actions = vec![
-                        "Reforge token now (wipe & relabel)",
-                        "Retry label scan",
-                        "Abort forge",
+                        "Cleanse it now (wipe & relabel)",
+                        "Rescan its sigils",
+                        "Stand down",
                     ];
                     let choice = Select::with_theme(&theme)
-                        .with_prompt("Safe mode: choose how to handle the label mismatch")
+                        .with_prompt("Safe mode: how shall we correct this ingot?")
                         .items(&actions)
                         .default(0)
                         .interact()
@@ -161,22 +166,22 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
                     match choice {
                         0 => {
-                            ui.warn(&format!(
-                                "Safe mode override engaged — reforging {} and resetting label.",
-                                usb_disk
-                            ));
+                        ui.warn(&format!(
+                            "As commanded — cleansing {} and carving the proper crest.",
+                            usb_disk
+                        ));
                             wipe_usb_token(&usb_disk, &usb_partition, ui)?;
                             settle_udev(ui)?;
                             effective_force = true;
                             continue;
                         }
                         1 => {
-                            ui.note("Retrying label verification after udev settles…");
+                        ui.note("Let the signals settle. I will verify the crest once more.");
                             settle_udev(ui)?;
                             continue;
                         }
                         _ => {
-                            ui.warn("Forge aborted during safe-mode label verification.");
+                        ui.warn("Safe mode terminated. The forge rests until you return.");
                             return Err(anyhow!("initialization aborted by operator"));
                         }
                     }
@@ -185,7 +190,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         }
     }
 
-    begin_phase(ui, "Beskar Key Forge", opts.confirm_each_phase)?;
+    begin_phase(ui, "Keysmithing // Beskar Pattern", opts.confirm_each_phase)?;
     let forge = forge_usb_key(&usb_partition, &key_filename, effective_force, ui)?;
     timing.pace(Pace::Info);
 
@@ -200,7 +205,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
     let fingerprint_short = group_string(&forge.sha256[..32], 8, ' ');
     ui.security(&format!(
-        "Key signet (SHA-256 · first 128 bits): {}",
+        "Key signet etched — SHA-256 (first 128 bits): {}",
         fingerprint_short
     ));
     audit_log(
@@ -212,7 +217,9 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     let config_path = PathBuf::from(DEFAULT_CONFIG_PATH);
 
     let (config, force_write) = if config_path.exists() {
-        ui.note("Existing Beskar creed detected — aligning it with the new forge output.");
+        ui.note(
+            "A prior creed is etched into this plate. I will bring its lines in step with today's forging.",
+        );
 
         let backup_path = backup_existing_config(&config_path)?;
         ui.note(&format!(
@@ -228,12 +235,13 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
                     &key_path,
                     &forge.sha256,
                     DEFAULT_TIMEOUT,
+                    &binary_path,
                 );
                 existing
             }
             Err(err) => {
                 ui.warn(&format!(
-                    "Existing creed unreadable ({}). Forging fresh Mandalorian template.",
+                    "Existing creed unreadable ({}). I will hammer out a fresh Mandalorian template.",
                     err
                 ));
                 default_config(
@@ -242,6 +250,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
                     &forge.sha256,
                     DEFAULT_TIMEOUT,
                     &config_path,
+                    &binary_path,
                 )
             }
         };
@@ -254,6 +263,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
                 &forge.sha256,
                 DEFAULT_TIMEOUT,
                 &config_path,
+                &binary_path,
             ),
             false,
         )
@@ -274,7 +284,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         "Armor Fittings // Dracut Integration",
         opts.confirm_each_phase,
     )?;
-    install_dracut_module(&dataset, &config_path, ui)?;
+    install_dracut_module(&dataset, &config_path, &binary_path, ui)?;
     timing.pace(Pace::Info);
 
     begin_phase(ui, "Clan Contingency", opts.confirm_each_phase)?;
@@ -293,17 +303,17 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         opts.confirm_each_phase,
     )?;
     if opts.offer_dracut_rebuild {
-        ui.info("Armorer recommends refreshing the forge molds immediately.");
+        ui.info("I recommend refreshing the forge molds immediately.");
         match rebuild_initramfs(ui) {
-            Ok(_) => ui.success("Initramfs reforged with Beskar module."),
+            Ok(_) => ui.success("Initramfs reforged with the beskar module embedded."),
             Err(e) => {
-                ui.warn(&format!("Unable to rebuild initramfs automatically: {}", e));
+                ui.warn(&format!("Automatic initramfs rebuild failed ({}).", e));
                 ui.note("Run `dracut -f` manually once the issue is resolved.");
             }
         }
     } else {
         ui.note(
-            "Dracut rebuild deferred — rerun with --offer-dracut-rebuild when you wish the Armorer to handle it.",
+            "Dracut rebuild deferred — rerun with --offer-dracut-rebuild when you wish me to handle it.",
         );
     }
 
@@ -325,8 +335,8 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         ],
     );
 
-    ui.success("Beskar armour assembled. Defensive routines now stand ready.");
-    ui.note("Next: run `zbk doctor`, then rebuild initramfs to honor the forge. This is the Way.");
+    ui.success("The beskar plating is secured. Defensive routines now await deployment.");
+    ui.note("Marching orders: run `zbk doctor`, then rebuild initramfs to honor the forge. This is the Way.");
     audit_log(
         "INIT_COMPLETE",
         &format!(
@@ -349,7 +359,7 @@ fn begin_phase(ui: &UX, label: &str, confirm: bool) -> Result<()> {
             .interact()
             .context("safe mode confirmation failed")?;
         if !proceed {
-            ui.warn("Safe mode invoked abort — forge sequence halted by operator.");
+            ui.warn("Safe mode abort acknowledged — forge sequence halted at your command.");
             return Err(anyhow!("initialization aborted by operator"));
         }
     }
@@ -383,11 +393,13 @@ fn default_config(
     sha256: &str,
     timeout: u64,
     config_path: &Path,
+    binary_path: &Path,
 ) -> ConfigFile {
     ConfigFile {
         policy: Policy {
             datasets: vec![dataset.to_string()],
             zfs_path: Some(DEFAULT_ZFS_BIN.to_string()),
+            binary_path: Some(binary_path.to_string_lossy().into_owned()),
             allow_root: true,
         },
         crypto: CryptoCfg {
@@ -408,6 +420,7 @@ fn normalize_config(
     key_path: &Path,
     sha256: &str,
     default_timeout: u64,
+    binary_path: &Path,
 ) {
     cfg.policy.allow_root = true;
 
@@ -423,6 +436,8 @@ fn normalize_config(
     {
         cfg.policy.zfs_path = Some(DEFAULT_ZFS_BIN.to_string());
     }
+
+    cfg.policy.binary_path = Some(binary_path.to_string_lossy().into_owned());
 
     if cfg.crypto.timeout_secs == 0 {
         cfg.crypto.timeout_secs = default_timeout;
@@ -472,7 +487,7 @@ fn report_usb_target(ui: &UX, device: &str) {
         Ok(meta) => {
             let descriptor = describe_target(&meta);
             ui.info(&format!(
-                "Forge sensors register {} as a {} candidate.",
+                "My sensors read {} as a {} candidate.",
                 device, descriptor
             ));
             audit_log(
@@ -480,12 +495,12 @@ fn report_usb_target(ui: &UX, device: &str) {
                 &format!("device={} kind={}", device, descriptor),
             );
             if descriptor != "block device" {
-                ui.warn("The Armorer prefers a raw block device (e.g., /dev/sdb) for true Beskar.");
+                ui.warn("I prefer a raw block device (e.g., /dev/sdb) for true beskar.");
             }
         }
         Err(err) => {
-            ui.warn(&format!("Forge sensors cannot reach {} ({}).", device, err));
-            ui.note("Proceeding blind — confirm the path before striking the hammer again.");
+            ui.warn(&format!("My instruments cannot reach {} ({}).", device, err));
+            ui.note("Proceeding blind — confirm the path before we strike the hammer again.");
             audit_log(
                 "INIT_USB_SCAN_FAIL",
                 &format!("device={} err={}", device, err),
@@ -541,7 +556,13 @@ fn derive_device_layout(device: &str) -> Result<(String, String)> {
 
     let block_type = query_block_info(&device, "TYPE")?;
     match block_type.as_str() {
-        "disk" => Ok((device.clone(), format!("{}1", device))),
+        "disk" => {
+            let partition = match existing_partition_for_disk(&device) {
+                Ok(Some(path)) => path,
+                Ok(None) | Err(_) => predict_partition_name(&device),
+            };
+            Ok((device.clone(), partition))
+        }
         "part" => {
             let parent = query_block_info(&device, "PKNAME")?;
             if parent.is_empty() {
@@ -556,6 +577,46 @@ fn derive_device_layout(device: &str) -> Result<(String, String)> {
     }
 }
 
+fn existing_partition_for_disk(disk: &str) -> Result<Option<String>> {
+    let out = run_external(
+        LSBLK_BINARIES,
+        &["-P", "-nrpo", "PATH,TYPE", disk],
+        Duration::from_secs(5),
+    )?;
+
+    if out.status != 0 {
+        return Ok(None);
+    }
+
+    for line in out.stdout.lines() {
+        let pairs = parse_lsblk_pairs(line);
+        if pairs.get("TYPE").map(String::as_str) == Some("part") {
+            if let Some(path) = pairs.get("PATH") {
+                if Path::new(path).exists() {
+                    return Ok(Some(path.clone()));
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn predict_partition_name(disk: &str) -> String {
+    let suffix_is_digit = Path::new(disk)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.chars().last())
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false);
+
+    if suffix_is_digit {
+        format!("{}p1", disk)
+    } else {
+        format!("{}1", disk)
+    }
+}
+
 fn ensure_beskar_partition(partition: &str, ui: &UX) -> Result<()> {
     let out = run_external(
         BLKID_BINARIES,
@@ -565,7 +626,7 @@ fn ensure_beskar_partition(partition: &str, ui: &UX) -> Result<()> {
 
     if out.status != 0 {
         ui.warn(&format!(
-            "Unable to read label for {} ({}). Invoke --force to reforge the token.",
+            "Label on {} refuses to reveal itself ({}). Invoke --force to reforge the token.",
             partition,
             out.stderr.trim()
         ));
@@ -575,7 +636,7 @@ fn ensure_beskar_partition(partition: &str, ui: &UX) -> Result<()> {
     let label = out.stdout.trim();
     if label != BESKAR_LABEL {
         ui.warn(&format!(
-            "Partition {} is stamped '{}', expected '{}'. Use --force to recast it.",
+            "Partition {} bears the stamp '{}'; expected '{}'. Invoke --force to recast it.",
             partition, label, BESKAR_LABEL
         ));
         return Err(anyhow!("Unexpected label {} for {}", label, partition));
@@ -607,7 +668,7 @@ fn wipe_usb_token(disk: &str, partition: &str, ui: &UX) -> Result<()> {
     )?;
 
     ui.success(&format!(
-        "{} quenched and relabeled {}.",
+        "{} quenched; it now carries the {} sigil.",
         partition, BESKAR_LABEL
     ));
     Ok(())
@@ -616,7 +677,7 @@ fn wipe_usb_token(disk: &str, partition: &str, ui: &UX) -> Result<()> {
 fn settle_udev(ui: &UX) -> Result<()> {
     let res = run_external(UDEVADM_BINARIES, &["settle"], Duration::from_secs(10));
     if let Err(err) = res {
-        ui.warn(&format!("udevadm settle failed: {}", err));
+        ui.warn(&format!("udevadm settle faltered ({}). Expect a brief delay.", err));
     }
     Ok(())
 }
@@ -657,7 +718,7 @@ fn forge_usb_key(partition: &str, key_filename: &str, force: bool, ui: &UX) -> R
             fs::remove_file(&key_path).context("remove existing key file")?;
         } else {
             ui.warn(&format!(
-                "Found prior alloy {} — reforging in place.",
+                "Found a prior alloy {} — reforging it in place.",
                 key_filename
             ));
             fs::remove_file(&key_path).ok();
@@ -694,7 +755,7 @@ fn forge_usb_key(partition: &str, key_filename: &str, force: bool, ui: &UX) -> R
     if !unmounted {
         if let Some(err) = last_err.take() {
             ui.warn(&format!(
-                "Standard unmount failed for {}: {}",
+                "Standard release failed for {} ({}).",
                 partition, err
             ));
         }
@@ -702,7 +763,7 @@ fn forge_usb_key(partition: &str, key_filename: &str, force: bool, ui: &UX) -> R
         if let Some(mp) = mount_path.to_str() {
             if let Err(inner) = force_unmount(mp, ui) {
                 ui.error(&format!(
-                    "Unable to disengage temporary mount {}: {}",
+                    "Unable to disengage temporary mount {} ({}).",
                     mp, inner
                 ));
                 return Err(anyhow!(
@@ -716,7 +777,7 @@ fn forge_usb_key(partition: &str, key_filename: &str, force: bool, ui: &UX) -> R
     if let Ok(true) = device_has_mounts(partition) {
         if let Err(inner) = force_unmount(partition, ui) {
             ui.error(&format!(
-                "Partition {} remains busy after attempted release: {}",
+                "Partition {} remains busy after the release attempt ({}).",
                 partition, inner
             ));
             return Err(anyhow!(
@@ -728,14 +789,14 @@ fn forge_usb_key(partition: &str, key_filename: &str, force: bool, ui: &UX) -> R
 
     if let Err(err) = mount_dir.close() {
         ui.warn(&format!(
-            "Temporary mount directory cleanup failed ({}): {}",
+            "Temporary mount directory cleanup faltered ({}): {}",
             mount_path.display(),
             err
         ));
     }
 
     ui.success(&format!(
-        "Beskar key sealed at {} (on {}).",
+        "Beskar key sealed at {} atop {}.",
         key_filename, partition
     ));
     Ok(ForgeResult { sha256 })
@@ -758,7 +819,7 @@ fn ensure_runtime_mount(
         let current = current.trim();
         if !current.is_empty() && current != mount_str {
             ui.warn(&format!(
-                "Partition {} currently mounted at {} — relocating to {}.",
+                "Partition {} currently rests at {} — relocating to {}.",
                 partition, current, mount_str
             ));
             force_unmount(current, ui)?;
@@ -793,7 +854,7 @@ fn ensure_runtime_mount(
                     );
                 }
                 ui.warn(&format!(
-                    "Unable to mount {} at {} ({}).",
+                    "Unable to mount {} at {} ({}). Awaiting your directive.",
                     partition, mount_str, err
                 ));
                 let options = vec!["Retry mount", "Abort forge"];
@@ -949,9 +1010,9 @@ fn select_usb_device(ui: &UX, confirm_each_phase: bool) -> Result<String> {
 
         if scanned.is_empty() {
             if confirm_each_phase {
-                ui.warn("No removable block devices detected.");
+                ui.warn("No removable block devices answered the call.");
                 ui.note(
-                    "Reconnect the USB token, wait for the system to register it, \
+                    "Reconnect the USB tribute, wait for the system to register it, \
                     then choose how to proceed.",
                 );
                 let choices = vec!["Retry scan", "Enter device path manually", "Abort forge"];
@@ -974,17 +1035,17 @@ fn select_usb_device(ui: &UX, confirm_each_phase: bool) -> Result<String> {
                             .context("manual USB device entry")?;
                         let trimmed = manual.trim();
                         if trimmed.is_empty() {
-                            ui.warn("Empty device path entered — retrying scan.");
+                            ui.warn("Empty device path received — restarting the scan.");
                             continue;
                         }
                         ui.note(&format!(
-                            "Safe mode: proceeding with operator-specified device {}.",
+                            "Safe mode: proceeding with operator-specified vessel {}.",
                             trimmed
                         ));
                         return Ok(trimmed.to_string());
                     }
                     _ => {
-                        ui.warn("Operator aborted forge during safe-mode device selection.");
+                        ui.warn("Operator withdrew from the forge during safe-mode device selection.");
                         return Err(anyhow!("initialization aborted by operator"));
                     }
                 }
@@ -1093,7 +1154,10 @@ fn dismantle_mounts(node: &str, ui: &UX) -> Result<()> {
         if mount.is_empty() {
             continue;
         }
-        ui.note(&format!("Disengaging mount {} at {}", target, mount));
+        ui.note(&format!(
+            "Disengaging mount {} at {} — the path must be clear.",
+            target, mount
+        ));
         match run_external(UMOUNT_BINARIES, &[mount.as_str()], Duration::from_secs(10)) {
             Ok(res) if res.status == 0 => {
                 settle_udev(ui)?;
@@ -1106,16 +1170,22 @@ fn dismantle_mounts(node: &str, ui: &UX) -> Result<()> {
 
     // also ensure the block node itself is not mounted
     if let Err(err) = run_external(UMOUNT_BINARIES, &[node], Duration::from_secs(10)) {
-        ui.warn(&format!("Direct unmount of {} failed: {}", node, err));
+        ui.warn(&format!(
+            "Direct unmount of {} resisted release ({}).",
+            node, err
+        ));
         if let Err(inner) = force_unmount(node, ui) {
-            ui.warn(&format!("Force unmount of {} failed: {}", node, inner));
+            ui.warn(&format!(
+                "Force unmount of {} faltered as well ({}).",
+                node, inner
+            ));
         }
     }
     Ok(())
 }
 
 fn force_unmount(target: &str, ui: &UX) -> Result<()> {
-    ui.warn(&format!("Forcing unmount of {}", target));
+    ui.warn(&format!("Applying force to unmount {}", target));
     let attempts = vec![
         vec![target.to_string()],
         vec!["-l".to_string(), target.to_string()],
@@ -1161,7 +1231,19 @@ fn device_has_mounts(node: &str) -> Result<bool> {
     Ok(false)
 }
 
-pub(crate) fn install_dracut_module(dataset: &str, config_path: &Path, ui: &UX) -> Result<()> {
+pub(crate) fn install_dracut_module(
+    dataset: &str,
+    config_path: &Path,
+    binary_path: &Path,
+    ui: &UX,
+) -> Result<()> {
+    if !binary_path.exists() {
+        return Err(anyhow!(
+            "zfs_beskar_key binary not found at {}",
+            binary_path.display()
+        ));
+    }
+
     fs::create_dir_all(DRACUT_MODULE_DIR).context("create dracut module directory")?;
 
     let script_path = Path::new(DRACUT_MODULE_DIR).join(DRACUT_SCRIPT_NAME);
@@ -1180,7 +1262,7 @@ TOKEN_LABEL="{label}"
 MOUNTPOINT="/run/beskar"
 CONFIG_PATH="{config}"
 DATASET="{dataset}"
-BINARY="/usr/local/bin/zfs_beskar_key"
+BINARY="{binary}"
 
 mkdir -p "$MOUNTPOINT"
 DEVICE=$(blkid -L $TOKEN_LABEL 2>/dev/null || true)
@@ -1204,7 +1286,8 @@ umount "$MOUNTPOINT" || warn "Failed to unmount Beskar token in initramfs."
 "#,
         label = BESKAR_LABEL,
         config = config_path.display(),
-        dataset = dataset
+        dataset = dataset,
+        binary = binary_path.display()
     );
 
     let mut script_file =
@@ -1229,13 +1312,14 @@ depends() {{
 install() {{
     inst_multiple blkid mount umount
     inst_simple "$moddir/{script}" /sbin/{script}
-    inst_simple /usr/local/bin/zfs_beskar_key /usr/local/bin/zfs_beskar_key
+    inst_simple "{binary}" "{binary}"
     inst_simple "{config}" "{config}"
     inst_hook initqueue/online 95 "$moddir/{script}"
 }}
 "#,
         script = DRACUT_SCRIPT_NAME,
         config = config_path.display(),
+        binary = binary_path.display(),
     );
 
     let mut setup_file =
@@ -1246,7 +1330,7 @@ install() {{
         .context("set module setup permissions")?;
 
     ui.success(&format!(
-        "Dracut module refreshed at {}.",
+        "Dracut module reforged at {}.",
         DRACUT_MODULE_DIR
     ));
     audit_log(
@@ -1266,7 +1350,7 @@ pub(crate) fn rebuild_initramfs(ui: &UX) -> Result<()> {
         .ok_or_else(|| anyhow!("dracut binary not found on PATH {:?}", candidates))?;
 
     ui.info(&format!(
-        "Invoking dracut via {} to refresh initramfs…",
+        "Calling dracut via {} to refresh the initramfs image…",
         dracut_path
     ));
     let cmd = Cmd::new_allowlisted(*dracut_path, Duration::from_secs(180))?;

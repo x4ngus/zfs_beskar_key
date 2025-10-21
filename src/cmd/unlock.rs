@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> Result<()> {
     ui.banner();
     ui.info(&format!(
-        "Starting unlock sequence for dataset: {}",
+        "Initiating unlock sequence for dataset {}.",
         dataset
     ));
     timing.pace(Pace::Info);
@@ -38,7 +38,7 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
     };
 
     if zfs.is_unlocked(dataset)? {
-        ui.success("Dataset already unlocked. No action taken.");
+        ui.success("Dataset already stands open; no further strikes required.");
         audit_log("UNLOCK_SKIP", &format!("{} already unlocked", dataset));
         return Ok(());
     }
@@ -50,16 +50,16 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
         Ok(root) => {
             if root != dataset {
                 ui.info(&format!(
-                    "Dataset {} inherits encryption from root {}.",
+                    "Dataset {} draws its ward from encryption root {}.",
                     dataset, root
                 ));
             } else {
-                ui.info(&format!("Encryption root identified as {}.", root));
+                ui.info(&format!("Encryption root stands as {}.", root));
             }
             root
         }
         Err(_) => {
-            ui.warn("Unable to determine encryption root. Proceeding with given dataset.");
+            ui.warn("Unable to trace the encryption root; proceeding directly against the dataset.");
             dataset.to_string()
         }
     };
@@ -76,7 +76,7 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
 
     for attempt in 1..=MAX_ATTEMPTS {
         ui.info(&format!(
-            "Attempt {}/{} to unlock encryption root {}...",
+            "Attempt {}/{} to unlock {}...",
             attempt, MAX_ATTEMPTS, enc_root
         ));
         timing.pace(Pace::Info);
@@ -85,7 +85,7 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
             match obtain_key_material(ui, timing, cfg, &enc_root, attempt == 1) {
                 Ok(pair) => pair,
                 Err(err) => {
-                    ui.error(&format!("Unable to obtain key material: {}", err));
+                    ui.error(&format!("Unable to obtain key material ({}).", err));
                     audit_log("UNLOCK_KEY_FETCH_FAIL", &err.to_string());
                     return Err(err);
                 }
@@ -94,18 +94,18 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
         match zfs.load_key(&enc_root, &key_material) {
             Ok(_) => {
                 ui.success(&format!(
-                    "Key accepted. Encryption root {} unlocked successfully.",
+                    "Key accepted. Encryption root {} now stands unlocked.",
                     enc_root
                 ));
                 if matches!(origin, KeyOrigin::Passphrase) {
-                    ui.note("Fallback passphrase accepted. Replace or rebuild the Beskar key when practical.");
+                    ui.note("Fallback passphrase accepted. Replace or rebuild the beskar key at the earliest opportunity.");
                 }
                 audit_log("UNLOCK_OK", &format!("Unlocked {}", enc_root));
                 lockout.reset(ui, timing);
                 return Ok(());
             }
             Err(e) => {
-                ui.error(&format!("Unlock failed for {}: {}", enc_root, e));
+                ui.error(&format!("Unlock attempt on {} failed ({}).", enc_root, e));
                 audit_log(
                     "UNLOCK_ATTEMPT_FAIL",
                     &format!("Attempt {} failed for {}: {}", attempt, enc_root, e),
@@ -129,7 +129,7 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
             MAX_ATTEMPTS, enc_root
         ),
     );
-    ui.error("Unlock failed after maximum retry attempts.");
+    ui.error("Unlock failed after exhausting the maximum retry attempts.");
     Err(anyhow!(
         "Unlock failed after {} attempts for {}",
         MAX_ATTEMPTS,
@@ -164,7 +164,7 @@ fn obtain_key_material(
             }
 
             ui.warn(&format!(
-                "USB key unavailable ({}) — invoking fallback passphrase.",
+                "USB key unavailable ({}); invoking the fallback passphrase ritual.",
                 usb_err
             ));
             timing.pace(Pace::Prompt);
@@ -217,7 +217,9 @@ fn load_usb_key_material(ui: &UX, cfg: &ConfigFile) -> Result<Zeroizing<Vec<u8>>
         ui.success("USB key checksum verified (SHA-256 match).");
         audit_log("UNLOCK_CHECKSUM", "Checksum verified successfully");
     } else {
-        ui.warn("No expected SHA-256 checksum found in config.usb.expected_sha256.");
+        ui.warn(
+            "No reference SHA-256 recorded in config.usb.expected_sha256 — authenticity check skipped.",
+        );
         audit_log("UNLOCK_CHECKSUM_SKIP", "Checksum skipped; field not set");
     }
 
@@ -231,7 +233,7 @@ fn prompt_fallback_passphrase(
     enc_root: &str,
 ) -> Result<Zeroizing<Vec<u8>>> {
     ui.note(&format!(
-        "Fallback activation: Provide the passphrase for {}.",
+        "Fallback activation: provide the passphrase for {}.",
         enc_root
     ));
     timing.pace(Pace::Prompt);
