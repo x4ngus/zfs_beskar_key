@@ -2,6 +2,29 @@
 
 ---
 
+## v1.4.0 — Beskar Keepsakes
+**Date:** 2025-10-21  
+**Codename:** *Fallback Mandate*
+
+### Highlights
+
+- **Forge flow defaults to full reforging**  
+  - `init` now wipes and relabels tokens automatically while still offering a safe-mode path with operator confirmations.  
+  - Every successful forge remounts the USB at `/run/beskar`, so `doctor`, `self-test`, and boot-time unlocks see the new key immediately.
+- **Hardened fallback armour**  
+  - If the USB key is missing or corrupt, unlock automatically pivots to `systemd-ask-password` (or an interactive passphrase) without leaving the system unbootable.  
+  - The command runner now streams raw key bytes, resolving `zfs load-key` length errors and keeping the vault drill realistic.
+- **Bootstrap parity with the Rust forge**  
+  - `scripts/bootstrap.sh` mirrors the new workflow: it mounts the freshly forged token under `/run/beskar` and installs the updated units before offering an initramfs rebuild.
+
+### Fixes & Maintenance
+
+- Allowed `systemd-ask-password` and binary stdin in the allowlisted command executor.  
+- Routed the `auto-unlock` CLI path through the same resilient unlock routine used by systemd units.  
+- Smoothed unmount/back-off logic to eliminate lingering `target is busy` errors during key forging and rehearsal drills.
+
+---
+
 ## v1.3.0 — Armorer's Choice
 **Date:** 2025-10-20  
 **Codename:** *Clan Selector*

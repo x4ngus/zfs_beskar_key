@@ -62,6 +62,8 @@ impl Cmd {
             "/sbin/udevadm",
             "/usr/sbin/udevadm",
             "/usr/bin/udevadm",
+            "/bin/systemd-ask-password",
+            "/usr/bin/systemd-ask-password",
         ];
         if !allowed.contains(&path_str.as_str()) {
             return Err(anyhow!("Command '{}' not in allowlist", path_str));
@@ -74,11 +76,11 @@ impl Cmd {
     }
 
     /// Run command with arguments, returning `OutputData`
-    pub fn run(&self, args: &[&str], input: Option<&str>) -> Result<OutputData> {
+    pub fn run(&self, args: &[&str], input: Option<&[u8]>) -> Result<OutputData> {
         let mut cmd = Command::new(&self.path);
         cmd.args(args);
 
-        if let Some(input_text) = input {
+        if let Some(input_bytes) = input {
             cmd.stdin(std::process::Stdio::piped());
             let mut child = cmd
                 .stdout(std::process::Stdio::piped())
@@ -88,7 +90,7 @@ impl Cmd {
 
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
-                stdin.write_all(input_text.as_bytes())?;
+                stdin.write_all(input_bytes)?;
             }
 
             let output = self.wait_with_timeout(child)?;

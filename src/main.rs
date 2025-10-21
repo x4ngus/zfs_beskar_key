@@ -14,12 +14,13 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use rand::rngs::OsRng;
 use rand::RngCore;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use ui::{Pace, Timing, UX};
 use zeroize::Zeroizing;
@@ -56,6 +57,23 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    Init {
+        /// Explicit USB block device (e.g., /dev/sdb). Prompts if omitted.
+        #[arg(long)]
+        usb_device: Option<String>,
+
+        /// Override key file output path (defaults to /run/beskar/<dataset>.keyhex).
+        #[arg(long)]
+        key_path: Option<PathBuf>,
+
+        /// Safe mode: prompt before each forge phase and skip forced wipe.
+        #[arg(long)]
+        safe: bool,
+
+        /// Skip automatic dracut rebuild after forge completes.
+        #[arg(long)]
+        skip_dracut: bool,
+    },
     ForgeKey,
     Unlock {
         #[arg(long)]
@@ -151,6 +169,23 @@ fn dispatch_command(
     cfg: &ConfigFile,
 ) -> Result<()> {
     match command {
+        Commands::Init {
+            usb_device,
+            key_path,
+            safe,
+            skip_dracut,
+        } => {
+            let opts = cmd::init::InitOptions {
+                pool: cli.dataset.clone(),
+                usb_device: usb_device.clone(),
+                key_path: key_path.clone(),
+                force: !safe,
+                auto_unlock: true,
+                offer_dracut_rebuild: !skip_dracut,
+                confirm_each_phase: *safe,
+            };
+            cmd::init::run_init(ui, timing, opts)?;
+        }
         Commands::ForgeKey => {
             let mut key = Zeroizing::new([0u8; 32]);
             OsRng.fill_bytes(&mut *key);
@@ -180,7 +215,7 @@ fn dispatch_command(
 
         Commands::AutoUnlock => {
             let dataset = resolve_dataset(&cli.dataset, cfg)?;
-            auto_unlock_flow(ui, cfg, &dataset)?;
+            cmd::unlock::run_unlock(ui, timing, cfg, &dataset)?;
         }
 
         Commands::Doctor => {
@@ -236,9 +271,22 @@ fn dispatch_menu_choice(
                 pool: cli.dataset.clone(),
                 usb_device: None,
                 key_path: None,
+                force: true,
+                auto_unlock: true,
+                offer_dracut_rebuild: true,
+                confirm_each_phase: false,
+            };
+            cmd::init::run_init(ui, timing, opts)?;
+        }
+        menu::MenuChoice::InitSafe => {
+            let opts = cmd::init::InitOptions {
+                pool: cli.dataset.clone(),
+                usb_device: None,
+                key_path: None,
                 force: false,
                 auto_unlock: true,
                 offer_dracut_rebuild: true,
+                confirm_each_phase: true,
             };
             cmd::init::run_init(ui, timing, opts)?;
         }
@@ -311,6 +359,7 @@ fn determine_encryption_root(zfs: &impl ZfsCryptoOps, dataset: &str, ui: &UX) ->
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 trait ZfsCryptoOps {
     fn is_unlocked(&self, dataset: &str) -> Result<bool>;
     fn encryption_root(&self, dataset: &str) -> Result<String>;
@@ -332,19 +381,7 @@ impl ZfsCryptoOps for zfs::Zfs {
 }
 
 // Auto-unlock flow
-fn auto_unlock_flow(ui: &UX, cfg: &ConfigFile, dataset: &str) -> Result<()> {
-    ui.info(&format!("Auto-unlock sequence for {}…", dataset));
-
-    let timeout = Duration::from_secs(cfg.crypto.timeout_secs.max(1));
-    let zfs = if let Some(path) = &cfg.policy.zfs_path {
-        zfs::Zfs::with_path(path, timeout)?
-    } else {
-        zfs::Zfs::discover(timeout)?
-    };
-
-    auto_unlock_with(&zfs, ui, cfg, dataset)
-}
-
+#[cfg(test)]
 fn auto_unlock_with(
     zfs: &impl ZfsCryptoOps,
     ui: &UX,

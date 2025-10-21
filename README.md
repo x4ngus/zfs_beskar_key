@@ -71,7 +71,8 @@ This script will:
 1. Detect removable disks and confirm the target before formatting.  
 2. Weld a single ext4 partition labeled `BESKARKEY`, then forge a dataset-specific key file (for example `rpool_root.keyhex`).  
 3. Hash the forged key (SHA-256), inscribe `/etc/zfs-beskar.toml`, and journal a timestamped backup if the file already exists.  
-4. Install and enable `beskar-usb.mount` and `beskar-unlock.service` through the hardened installer built into the Rust CLI, then offer to run `dracut -f` immediately so the rescue image learns the new module.
+4. Mount the refreshed token at `/run/beskar` so `doctor`, `self-test`, and the boot pipeline see the live key straight away.  
+5. Install and enable `beskar-usb.mount` and `beskar-unlock.service` through the hardened installer built into the Rust CLI, then offer to run `dracut -f` immediately so the rescue image learns the new module.
 > Tip: You can inspect or edit the scripts/bootstrap.sh script before running — it’s fully commented and self-documenting.
 
 ### 3. Manual Setup (Optional)
@@ -104,7 +105,9 @@ The init workflow now:
 - Creates a timestamped backup if `/etc/zfs-beskar.toml` already exists.  
 - Updates the dataset list, key path, and checksum without disturbing other manual edits.  
 - Installs the dracut hooks and systemd units needed for unattended unlock, then offers to rebuild initramfs on the spot.  
-- Prompts you to pick the Beskar carrier (auto-highlighting any stick already labeled `BESKARKEY`) so repeat forges stay safe.
+- Prompts you to pick the Beskar carrier (auto-highlighting any stick already labeled `BESKARKEY`) so repeat forges stay safe.  
+- Mounts the refreshed token at `/run/beskar`, guaranteeing the doctor and vault drill spot the new key immediately.  
+- Runs with `--force` by default to ensure a fresh alloy each time; add `--safe` if you want prompts before every destructive step.
 
 ---
 
@@ -175,7 +178,7 @@ sudo systemctl daemon-reload
 During boot or manual unlock, **ZFS_BESKAR_KEY** uses a tiered recovery process to ensure your filesystem remains accessible even if the USB key is lost, damaged, or not detected.
 
 1. **Primary unlock path** — The tool first attempts to read the HEX key from the mounted USB device path (`/run/beskar/rpool.keyhex`).  
-2. **Fallback unlock path** — If the USB key is missing or invalid, it triggers a secure passphrase prompt using `systemd-ask-password`.  
+2. **Fallback unlock path** — If the USB key is missing or invalid, it automatically triggers a secure passphrase prompt using `systemd-ask-password`, whether you are booting via systemd units or running the CLI manually.  
 3. **Fail-safe mode** — If the passphrase prompt fails or no input is provided, the service exits gracefully. Boot continues without mounting encrypted datasets, allowing you to log in and unlock manually.
 
 This design prevents complete lockout and eliminates the “unbootable” state common in older automated unlock methods.

@@ -9,10 +9,14 @@ readonly CONFIG_PATH="${CONFIG_PATH:-/etc/zfs-beskar.toml}"
 readonly MOUNT_DIR="${MOUNT_DIR:-/mnt/beskar}"
 readonly RUN_DIR="${RUN_DIR:-/run/beskar}"
 readonly BINARY="${BINARY:-/usr/local/bin/zfs_beskar_key}"
+LEAVE_RUN_MOUNT=0
 
 cleanup() {
     if mountpoint -q "$MOUNT_DIR"; then
         umount "$MOUNT_DIR" || true
+    fi
+    if [[ ${LEAVE_RUN_MOUNT:-0} -eq 0 ]] && mountpoint -q "$RUN_DIR"; then
+        umount "$RUN_DIR" || true
     fi
 }
 trap cleanup EXIT
@@ -123,6 +127,20 @@ chmod 600 "$CONFIG_PATH"
 
 echo "Installing systemd units via zfs_beskar_key..."
 "$BINARY" install-units --config "$CONFIG_PATH" --dataset "$DATASET"
+
+echo
+echo "Mounting the Beskar token at $RUN_DIR for immediate use..."
+if mountpoint -q "$RUN_DIR"; then
+    umount "$RUN_DIR" || die "Unable to release existing mount at $RUN_DIR"
+fi
+mount "$PARTITION" "$RUN_DIR"
+udevadm settle || true
+if [[ ! -f "$RUN_DIR/$KEY_NAME" ]]; then
+    die "Key file $RUN_DIR/$KEY_NAME not found after mounting."
+fi
+chmod 0400 "$RUN_DIR/$KEY_NAME"
+LEAVE_RUN_MOUNT=1
+echo "Beskar token mounted. Key path confirmed at $RUN_DIR/$KEY_NAME."
 
 echo
 if command -v dracut >/dev/null 2>&1; then

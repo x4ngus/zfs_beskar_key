@@ -10,6 +10,7 @@ use crate::ui::{Pace, Timing, UX};
 #[derive(Debug, Clone)]
 pub enum MenuChoice {
     Init,
+    InitSafe,
     VaultDrill,
     Status,
     Doctor,
@@ -51,10 +52,11 @@ pub fn show_main_menu(ui: &UX, timing: &Timing) -> Option<MenuChoice> {
     // Menu items
     // ------------------------------------------------------------------------
     let options = vec![
-        "Temper Beskar Key        [Forge USB token]",
-        "Vault Drill Simulation   [USB rehearsal]",
-        "Clan Status Scan         [Diagnostics]",
-        "Summon the Armorer       [Doctor checks]",
+        "Temper Beskar Key            [Forge USB token]",
+        "Temper Beskar Key (Safe)     [Guided forge]",
+        "Vault Drill Simulation       [USB rehearsal]",
+        "Clan Status Scan             [Diagnostics]",
+        "Summon the Armorer           [Doctor checks]",
         "Leave the Covert",
     ];
 
@@ -67,9 +69,10 @@ pub fn show_main_menu(ui: &UX, timing: &Timing) -> Option<MenuChoice> {
 
     let choice = match selection {
         0 => MenuChoice::Init,
-        1 => MenuChoice::VaultDrill,
-        2 => MenuChoice::Status,
-        3 => MenuChoice::Doctor,
+        1 => MenuChoice::InitSafe,
+        2 => MenuChoice::VaultDrill,
+        3 => MenuChoice::Status,
+        4 => MenuChoice::Doctor,
         _ => MenuChoice::Quit,
     };
 

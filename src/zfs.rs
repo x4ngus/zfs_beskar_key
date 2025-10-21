@@ -47,11 +47,7 @@ impl Zfs {
     /// Internal runner for all ZFS sub-commands.
     fn run(&self, args: &[&str], input: Option<&[u8]>) -> Result<OutputData> {
         let cmd = Cmd::new_allowlisted(&self.path, self.timeout)?;
-        let input_str = input
-            .map(|bytes| std::str::from_utf8(bytes))
-            .transpose()
-            .context("invalid UTF-8 in input")?;
-        cmd.run(args, input_str)
+        cmd.run(args, input)
     }
 
     #[allow(dead_code)]
@@ -85,12 +81,8 @@ impl Zfs {
 
     /// Loads a key into ZFS using stdin (never shell-escaped).
     pub fn load_key(&self, dataset: &str, key: &[u8]) -> Result<()> {
-        let mut buf = Vec::with_capacity(key.len() + 1);
-        buf.extend_from_slice(key);
-        buf.push(b'\n');
-
         let out = self
-            .run(&["load-key", "-L", "prompt", dataset], Some(&buf))
+            .run(&["load-key", "-L", "prompt", dataset], Some(key))
             .context("zfs load-key")?;
         if out.status != 0 {
             return Err(anyhow!("zfs load-key failed: {}", out.stderr));

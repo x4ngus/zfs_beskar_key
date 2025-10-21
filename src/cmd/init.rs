@@ -22,7 +22,7 @@ use crate::config::{ConfigFile, CryptoCfg, Fallback, Policy, Usb};
 use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
-use dialoguer::{theme::ColorfulTheme, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::collections::HashMap;
 
 const BESKAR_LABEL: &str = "BESKARKEY";
@@ -57,6 +57,7 @@ pub struct InitOptions {
     pub force: bool,
     pub auto_unlock: bool,
     pub offer_dracut_rebuild: bool,
+    pub confirm_each_phase: bool,
 }
 
 // ----------------------------------------------------------------------------
@@ -65,7 +66,11 @@ pub struct InitOptions {
 
 pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     ui.banner();
-    ui.phase("Forge Initialization // Tempering Beskar");
+    begin_phase(
+        ui,
+        "Forge Initialization // Tempering Beskar",
+        opts.confirm_each_phase,
+    )?;
     ui.info("Summoning the covert's forge to temper armour around your filesystem core.");
     timing.pace(Pace::Info);
 
@@ -90,7 +95,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
     let usb_target = match opts.usb_device.clone() {
         Some(dev) => dev,
-        None => select_usb_device(ui)?,
+        None => select_usb_device(ui, opts.confirm_each_phase)?,
     };
 
     let (usb_disk, usb_partition) = derive_device_layout(&usb_target)?;
@@ -111,14 +116,16 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     );
     timing.pace(Pace::Info);
 
-    ui.phase("Forge Survey // Inspect Alloy");
+    begin_phase(ui, "Forge Survey // Inspect Alloy", opts.confirm_each_phase)?;
     report_usb_target(ui, &usb_disk);
     if usb_partition != usb_disk {
         report_usb_target(ui, &usb_partition);
     }
     timing.pace(Pace::Info);
 
-    if opts.force {
+    let mut effective_force = opts.force;
+
+    if effective_force {
         ui.warn(&format!(
             "Force flag detected — remelting {} so a fresh Beskar token can be poured.",
             usb_disk
@@ -130,11 +137,65 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
             &format!("disk={} partition={}", usb_disk, usb_partition),
         );
     } else {
-        ensure_beskar_partition(&usb_partition, ui)?;
+        loop {
+            match ensure_beskar_partition(&usb_partition, ui) {
+                Ok(_) => break,
+                Err(err) => {
+                    if !opts.confirm_each_phase {
+                        return Err(err);
+                    }
+
+                    ui.note("Safe mode: Beskar token is not prepared as expected.");
+                    let theme = ColorfulTheme::default();
+                    let actions = vec![
+                        "Reforge token now (wipe & relabel)",
+                        "Retry label scan",
+                        "Abort forge",
+                    ];
+                    let choice = Select::with_theme(&theme)
+                        .with_prompt("Safe mode: choose how to handle the label mismatch")
+                        .items(&actions)
+                        .default(0)
+                        .interact()
+                        .unwrap_or(actions.len() - 1);
+
+                    match choice {
+                        0 => {
+                            ui.warn(&format!(
+                                "Safe mode override engaged — reforging {} and resetting label.",
+                                usb_disk
+                            ));
+                            wipe_usb_token(&usb_disk, &usb_partition, ui)?;
+                            settle_udev(ui)?;
+                            effective_force = true;
+                            continue;
+                        }
+                        1 => {
+                            ui.note("Retrying label verification after udev settles…");
+                            settle_udev(ui)?;
+                            continue;
+                        }
+                        _ => {
+                            ui.warn("Forge aborted during safe-mode label verification.");
+                            return Err(anyhow!("initialization aborted by operator"));
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    ui.phase("Beskar Key Forge");
-    let forge = forge_usb_key(&usb_partition, &key_filename, opts.force, ui)?;
+    begin_phase(ui, "Beskar Key Forge", opts.confirm_each_phase)?;
+    let forge = forge_usb_key(&usb_partition, &key_filename, effective_force, ui)?;
+    timing.pace(Pace::Info);
+
+    ensure_runtime_mount(
+        &usb_partition,
+        Path::new(&key_mount_dir),
+        &key_filename,
+        opts.confirm_each_phase,
+        ui,
+    )?;
     timing.pace(Pace::Info);
 
     let fingerprint_short = group_string(&forge.sha256[..32], 8, ' ');
@@ -147,7 +208,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         &format!("partition={} sha256={}", usb_partition, forge.sha256),
     );
 
-    ui.phase("Configuration Engraving");
+    begin_phase(ui, "Configuration Engraving", opts.confirm_each_phase)?;
     let config_path = PathBuf::from(DEFAULT_CONFIG_PATH);
 
     let (config, force_write) = if config_path.exists() {
@@ -208,11 +269,15 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     audit_log("INIT_CFG", &format!("Created {}", config_path.display()));
     timing.pace(Pace::Info);
 
-    ui.phase("Armor Fittings // Dracut Integration");
+    begin_phase(
+        ui,
+        "Armor Fittings // Dracut Integration",
+        opts.confirm_each_phase,
+    )?;
     install_dracut_module(&dataset, &config_path, ui)?;
     timing.pace(Pace::Info);
 
-    ui.phase("Clan Contingency");
+    begin_phase(ui, "Clan Contingency", opts.confirm_each_phase)?;
     let recovery = generate_recovery_key();
     let recovery_formatted = group_string(&recovery.to_uppercase(), 4, '-');
     ui.security(&format!(
@@ -222,7 +287,11 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     audit_log("INIT_RECOVERY", "Generated recovery key");
     timing.pace(Pace::Info);
 
-    ui.phase("Clan Briefing // Initramfs Advisory");
+    begin_phase(
+        ui,
+        "Clan Briefing // Initramfs Advisory",
+        opts.confirm_each_phase,
+    )?;
     if opts.offer_dracut_rebuild {
         ui.info("Armorer recommends refreshing the forge molds immediately.");
         match rebuild_initramfs(ui) {
@@ -240,7 +309,11 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
     let usb_uuid = detect_partition_uuid(&usb_partition).unwrap_or_else(|_| "unknown".to_string());
 
-    ui.phase("Forge Summary // Armour Inventory");
+    begin_phase(
+        ui,
+        "Forge Summary // Armour Inventory",
+        opts.confirm_each_phase,
+    )?;
     ui.data_panel(
         "Artifacts",
         &[
@@ -263,6 +336,24 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     );
     timing.pace(Pace::Critical);
 
+    Ok(())
+}
+
+fn begin_phase(ui: &UX, label: &str, confirm: bool) -> Result<()> {
+    if confirm {
+        let theme = ColorfulTheme::default();
+        let prompt = format!("Safe mode: proceed with {}?", label);
+        let proceed = Confirm::with_theme(&theme)
+            .with_prompt(prompt)
+            .default(false)
+            .interact()
+            .context("safe mode confirmation failed")?;
+        if !proceed {
+            ui.warn("Safe mode invoked abort — forge sequence halted by operator.");
+            return Err(anyhow!("initialization aborted by operator"));
+        }
+    }
+    ui.phase(label);
     Ok(())
 }
 
@@ -580,18 +671,67 @@ fn forge_usb_key(partition: &str, key_filename: &str, force: bool, ui: &UX) -> R
     file.sync_all().ok();
     fs::set_permissions(&key_path, Permissions::from_mode(0o400))
         .context("set key file permissions")?;
+    drop(file);
+    std::thread::sleep(Duration::from_millis(150));
 
-    if let Err(err) = unmount_partition(mount_dir.path()) {
-        ui.warn(&format!(
-            "Standard unmount failed for {}: {}",
-            partition, err
-        ));
-        if let Some(mp) = mount_dir.path().to_str() {
-            if let Err(inner) = force_unmount(mp, ui) {
-                ui.warn(&format!("Fallback unmount of {} failed: {}", mp, inner));
+    let mount_path = mount_dir.path().to_path_buf();
+    let mut unmounted = false;
+    let mut last_err: Option<anyhow::Error> = None;
+
+    for attempt in 0..3 {
+        match unmount_partition(mount_path.as_path()) {
+            Ok(_) => {
+                unmounted = true;
+                break;
+            }
+            Err(err) => {
+                last_err = Some(err);
+                std::thread::sleep(Duration::from_millis(200 * (attempt as u64 + 1)));
             }
         }
-        force_unmount(partition, ui)?;
+    }
+
+    if !unmounted {
+        if let Some(err) = last_err.take() {
+            ui.warn(&format!(
+                "Standard unmount failed for {}: {}",
+                partition, err
+            ));
+        }
+
+        if let Some(mp) = mount_path.to_str() {
+            if let Err(inner) = force_unmount(mp, ui) {
+                ui.error(&format!(
+                    "Unable to disengage temporary mount {}: {}",
+                    mp, inner
+                ));
+                return Err(anyhow!(
+                    "USB token busy at {} — close any open shells or file browsers and retry",
+                    mp
+                ));
+            }
+        }
+    }
+
+    if let Ok(true) = device_has_mounts(partition) {
+        if let Err(inner) = force_unmount(partition, ui) {
+            ui.error(&format!(
+                "Partition {} remains busy after attempted release: {}",
+                partition, inner
+            ));
+            return Err(anyhow!(
+                "Unable to release {}. Remove any processes using the USB token and retry.",
+                partition
+            ));
+        }
+    }
+
+    if let Err(err) = mount_dir.close() {
+        ui.warn(&format!(
+            "Temporary mount directory cleanup failed ({}): {}",
+            mount_path.display(),
+            err
+        ));
     }
 
     ui.success(&format!(
@@ -599,6 +739,98 @@ fn forge_usb_key(partition: &str, key_filename: &str, force: bool, ui: &UX) -> R
         key_filename, partition
     ));
     Ok(ForgeResult { sha256 })
+}
+
+fn ensure_runtime_mount(
+    partition: &str,
+    mount_path: &Path,
+    key_filename: &str,
+    confirm_each_phase: bool,
+    ui: &UX,
+) -> Result<()> {
+    fs::create_dir_all(mount_path).context("prepare runtime mountpoint")?;
+    let mount_str = mount_path
+        .to_str()
+        .ok_or_else(|| anyhow!("invalid runtime mount path"))?;
+
+    // If already mounted elsewhere, detach first.
+    if let Ok(current) = query_block_info(partition, "MOUNTPOINT") {
+        let current = current.trim();
+        if !current.is_empty() && current != mount_str {
+            ui.warn(&format!(
+                "Partition {} currently mounted at {} — relocating to {}.",
+                partition, current, mount_str
+            ));
+            force_unmount(current, ui)?;
+            settle_udev(ui)?;
+        } else if current == mount_str {
+            ui.note(&format!("Beskar token already mounted at {}.", mount_str));
+        }
+    }
+
+    let theme = ColorfulTheme::default();
+
+    let mut attempts = 0;
+    loop {
+        let current = query_block_info(partition, "MOUNTPOINT").unwrap_or_default();
+        if current.trim() == mount_str {
+            break;
+        }
+
+        match mount_partition(partition, mount_path) {
+            Ok(_) => {
+                settle_udev(ui)?;
+                ui.info(&format!(
+                    "Beskar token mounted at {} for runtime operations.",
+                    mount_str
+                ));
+                break;
+            }
+            Err(err) => {
+                if !confirm_each_phase {
+                    return Err(
+                        err.context(format!("failed to mount {} at {}", partition, mount_str))
+                    );
+                }
+                ui.warn(&format!(
+                    "Unable to mount {} at {} ({}).",
+                    partition, mount_str, err
+                ));
+                let options = vec!["Retry mount", "Abort forge"];
+                let selection = Select::with_theme(&theme)
+                    .with_prompt("Safe mode: mount attempt failed")
+                    .items(&options)
+                    .default(0)
+                    .interact()
+                    .unwrap_or(1);
+                if selection == 0 {
+                    attempts += 1;
+                    if attempts >= 5 {
+                        return Err(anyhow!(
+                            "unable to mount {} at {} after repeated attempts",
+                            partition,
+                            mount_str
+                        ));
+                    }
+                    settle_udev(ui)?;
+                    continue;
+                } else {
+                    return Err(anyhow!("initialization aborted by operator"));
+                }
+            }
+        }
+    }
+
+    let key_on_mount = mount_path.join(key_filename);
+    if !key_on_mount.exists() {
+        return Err(anyhow!(
+            "Key file {} not found on mounted token",
+            key_on_mount.display()
+        ));
+    }
+    fs::set_permissions(&key_on_mount, Permissions::from_mode(0o400))
+        .context("set runtime key permissions")?;
+    Ok(())
 }
 
 fn mount_partition(partition: &str, mountpoint: &Path) -> Result<()> {
@@ -649,75 +881,126 @@ fn detect_partition_uuid(partition: &str) -> Result<String> {
     Ok(out.stdout.trim().to_string())
 }
 
-fn select_usb_device(ui: &UX) -> Result<String> {
-    ui.phase("Target Selection // Choose Beskar Ingot");
-    let out = run_external(
-        LSBLK_BINARIES,
-        &["-P", "-nrpo", "NAME,TYPE,RM,SIZE,MODEL,LABEL"],
-        Duration::from_secs(5),
+fn select_usb_device(ui: &UX, confirm_each_phase: bool) -> Result<String> {
+    begin_phase(
+        ui,
+        "Target Selection // Choose Beskar Ingot",
+        confirm_each_phase,
     )?;
+    let theme = ColorfulTheme::default();
 
-    let mut disks = Vec::new();
-    let mut beskar_index: Option<usize> = None;
-    for line in out.stdout.lines() {
-        let pairs = parse_lsblk_pairs(line);
-        let kind = pairs.get("TYPE").cloned().unwrap_or_default();
-        let removable = pairs.get("RM").map(String::as_str) == Some("1");
-        let name = pairs.get("NAME").cloned().unwrap_or_default();
-        let label = pairs.get("LABEL").cloned().unwrap_or_default();
+    let (disks, beskar_index) = loop {
+        let out = run_external(
+            LSBLK_BINARIES,
+            &["-P", "-nrpo", "NAME,TYPE,RM,SIZE,MODEL,LABEL"],
+            Duration::from_secs(5),
+        )?;
 
-        if kind == "disk" && removable {
-            let size = pairs
-                .get("SIZE")
-                .cloned()
-                .unwrap_or_else(|| "?".to_string());
-            let model = pairs
-                .get("MODEL")
-                .cloned()
-                .unwrap_or_else(|| "Unknown".to_string());
-            if label.eq_ignore_ascii_case(BESKAR_LABEL) {
-                beskar_index = Some(disks.len());
-            }
-            let desc = format!(
-                "{}  [{}]  {}{}",
-                name,
-                size,
-                model,
-                if label.is_empty() {
-                    String::new()
-                } else {
-                    format!("  (label: {})", label)
+        let mut scanned = Vec::new();
+        let mut detected_beskar: Option<usize> = None;
+
+        for line in out.stdout.lines() {
+            let pairs = parse_lsblk_pairs(line);
+            let kind = pairs.get("TYPE").cloned().unwrap_or_default();
+            let removable = pairs.get("RM").map(String::as_str) == Some("1");
+            let name = pairs.get("NAME").cloned().unwrap_or_default();
+            let label = pairs.get("LABEL").cloned().unwrap_or_default();
+
+            if kind == "disk" && removable {
+                let size = pairs
+                    .get("SIZE")
+                    .cloned()
+                    .unwrap_or_else(|| "?".to_string());
+                let model = pairs
+                    .get("MODEL")
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown".to_string());
+                if label.eq_ignore_ascii_case(BESKAR_LABEL) {
+                    detected_beskar = Some(scanned.len());
                 }
-            );
-            disks.push((format!("/dev/{}", name), desc));
-        } else if kind == "part" && removable {
-            // Include orphaned removable partitions (user may select directly)
-            let desc = format!(
-                "{} (partition){}",
-                name,
-                if label.is_empty() {
-                    String::new()
-                } else {
-                    format!(" label={}", label)
+                let desc = format!(
+                    "{}  [{}]  {}{}",
+                    name,
+                    size,
+                    model,
+                    if label.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  (label: {})", label)
+                    }
+                );
+                scanned.push((format!("/dev/{}", name), desc));
+            } else if kind == "part" && removable {
+                let desc = format!(
+                    "{} (partition){}",
+                    name,
+                    if label.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" label={}", label)
+                    }
+                );
+                if label.eq_ignore_ascii_case(BESKAR_LABEL) {
+                    detected_beskar = Some(scanned.len());
                 }
-            );
-            if label.eq_ignore_ascii_case(BESKAR_LABEL) {
-                beskar_index = Some(disks.len());
+                scanned.push((format!("/dev/{}", name), desc));
             }
-            disks.push((format!("/dev/{}", name), desc));
         }
-    }
 
-    if disks.is_empty() {
-        return Err(anyhow!(
-            "No removable block devices detected. Attach a USB token or specify --usb-device."
-        ));
-    }
+        if scanned.is_empty() {
+            if confirm_each_phase {
+                ui.warn("No removable block devices detected.");
+                ui.note(
+                    "Reconnect the USB token, wait for the system to register it, \
+                    then choose how to proceed.",
+                );
+                let choices = vec!["Retry scan", "Enter device path manually", "Abort forge"];
+                let selection = Select::with_theme(&theme)
+                    .with_prompt("Safe mode: choose next action")
+                    .items(&choices)
+                    .default(0)
+                    .interact()
+                    .unwrap_or(choices.len() - 1);
+                match selection {
+                    0 => {
+                        settle_udev(ui)?;
+                        continue;
+                    }
+                    1 => {
+                        let manual: String = Input::with_theme(&theme)
+                            .with_prompt("Enter full /dev/<device> path for the USB token")
+                            .with_initial_text("/dev/")
+                            .interact_text()
+                            .context("manual USB device entry")?;
+                        let trimmed = manual.trim();
+                        if trimmed.is_empty() {
+                            ui.warn("Empty device path entered — retrying scan.");
+                            continue;
+                        }
+                        ui.note(&format!(
+                            "Safe mode: proceeding with operator-specified device {}.",
+                            trimmed
+                        ));
+                        return Ok(trimmed.to_string());
+                    }
+                    _ => {
+                        ui.warn("Operator aborted forge during safe-mode device selection.");
+                        return Err(anyhow!("initialization aborted by operator"));
+                    }
+                }
+            } else {
+                return Err(anyhow!(
+                    "No removable block devices detected. Attach a USB token or specify --usb-device."
+                ));
+            }
+        } else {
+            break (scanned, detected_beskar);
+        }
+    };
 
     let mut options: Vec<String> = disks.iter().map(|(_, desc)| desc.clone()).collect();
     options.push("Manual entry (specify /dev/ path)".to_string());
 
-    let theme = ColorfulTheme::default();
     let selection = Select::with_theme(&theme)
         .with_prompt("Select Beskar carrier")
         .default(beskar_index.unwrap_or(0))
@@ -842,15 +1125,40 @@ fn force_unmount(target: &str, ui: &UX) -> Result<()> {
 
     for args in attempts {
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        if let Ok(out) = run_external(UMOUNT_BINARIES, &refs, Duration::from_secs(10)) {
-            if out.status == 0 {
-                settle_udev(ui)?;
-                return Ok(());
+        for backoff in 0..3 {
+            if let Ok(out) = run_external(UMOUNT_BINARIES, &refs, Duration::from_secs(10)) {
+                if out.status == 0 {
+                    settle_udev(ui)?;
+                    return Ok(());
+                }
             }
+            std::thread::sleep(Duration::from_millis(150 * (backoff as u64 + 1)));
         }
     }
 
     Err(anyhow!("unable to unmount {} (resource busy)", target))
+}
+
+fn device_has_mounts(node: &str) -> Result<bool> {
+    let out = run_external(
+        LSBLK_BINARIES,
+        &["-P", "-nrpo", "NAME,MOUNTPOINT", node],
+        Duration::from_secs(5),
+    )?;
+
+    if out.status != 0 {
+        return Ok(false);
+    }
+
+    for line in out.stdout.lines() {
+        let pairs = parse_lsblk_pairs(line);
+        let mount = pairs.get("MOUNTPOINT").cloned().unwrap_or_default();
+        if !mount.is_empty() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 pub(crate) fn install_dracut_module(dataset: &str, config_path: &Path, ui: &UX) -> Result<()> {
