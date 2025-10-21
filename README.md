@@ -31,7 +31,7 @@ A USB-first ZFS unlock companion forged for dependable, unattended boots. Tribut
 curl -fsSL https://raw.githubusercontent.com/x4ngus/zfs_beskar_key/main/scripts/bootstrap.sh | sudo bash
 ```
 
-The script provisions the USB token, writes `/etc/zfs-beskar.toml`, mounts the key at `/run/beskar`, installs systemd units, and offers `dracut -f`.
+The script drives `zfs_beskar_key init` directly so the USB forge mirrors the Rust workflow—wiping the token, writing `/etc/zfs-beskar.toml`, installing systemd units, mounting `/run/beskar`, and optionally running `dracut -f`.
 
 ### Alternative: build from source
 
@@ -117,7 +117,7 @@ sudo /usr/local/bin/zfs_beskar_key auto-unlock --dataset=rpool/ROOT --config=/et
 
 ## Project Details
 
-- **Current release:** v1.6.0
+- **Current release:** v1.6.1
 - **License:** MIT (see `LICENSE`)
 - **Author:** Angus J.
 

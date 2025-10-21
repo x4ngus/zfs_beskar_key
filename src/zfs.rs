@@ -131,4 +131,17 @@ impl Zfs {
         }
         Ok(())
     }
+
+    /// Query a single dataset property and return the trimmed value.
+    pub fn get_property(&self, dataset: &str, property: &str) -> Result<String> {
+        let out = self.run(&["get", "-H", "-o", "value", property, dataset], None)?;
+        if out.status != 0 {
+            return Err(anyhow!(
+                "zfs get {} failed: {}",
+                property,
+                out.stderr.trim()
+            ));
+        }
+        Ok(out.stdout.trim().to_string())
+    }
 }

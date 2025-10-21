@@ -2,6 +2,21 @@
 
 ---
 
+## v1.6.1 — Raw Beskar Assay
+**Date:** 2025-10-21  
+**Codename:** *Raw Edge*
+
+### Highlights
+
+- **Read-only resilience**  
+  - Re-keying now verifies `keyformat=raw` via `zfs get`, eliminating the fatal `zfs set keyformat=raw` call against read-only encryption roots and keeping the forge flow intact.
+
+### Fixes & Maintenance
+
+- Added a ZFS property query helper so the init path and doctor tooling can audit keyformat without side-effects.
+- Bootstrap script now hands off to `zfs_beskar_key init`, guaranteeing the USB forge, config write, and dracut hook stay in lockstep with the Rust implementation.
+- Documentation and release metadata refreshed for v1.6.1, including README guidance and crate version bump.
+
 ## v1.6.0 — Beskar Rekey
 **Date:** 2025-10-21  
 **Codename:** *Forge Recall*

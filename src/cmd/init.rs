@@ -921,8 +921,7 @@ fn apply_key_to_encryption_root(
 
     zfs.set_property(enc_root, "keylocation", "prompt")
         .with_context(|| format!("restore keylocation=prompt on {}", enc_root))?;
-    zfs.set_property(enc_root, "keyformat", "raw")
-        .with_context(|| format!("ensure keyformat=raw on {}", enc_root))?;
+    verify_keyformat_raw(zfs, enc_root)?;
 
     match zfs.load_key(enc_root, &key_material.raw[..]) {
         Ok(_) => {
@@ -967,7 +966,12 @@ fn apply_key_to_encryption_root(
                     ));
                 } else {
                     let _ = zfs.set_property(enc_root, "keylocation", "prompt");
-                    let _ = zfs.set_property(enc_root, "keyformat", "raw");
+                    if let Err(check_err) = verify_keyformat_raw(zfs, enc_root) {
+                        ui.warn(&format!(
+                            "Encryption root {} reports unexpected keyformat after revert ({}).",
+                            enc_root, check_err
+                        ));
+                    }
                     if let Err(load_err) = zfs.load_key(enc_root, &previous.raw[..]) {
                         ui.warn(&format!(
                             "Reverted key could not be loaded automatically ({}).",
@@ -993,6 +997,20 @@ fn change_key_with_bytes(zfs: &Zfs, dataset: &str, key_bytes: &[u8]) -> Result<(
     fs::set_permissions(temp.path(), Permissions::from_mode(0o600))
         .context("set temporary key permissions")?;
     zfs.change_key_from_file(dataset, temp.path())?;
+    Ok(())
+}
+
+fn verify_keyformat_raw(zfs: &Zfs, dataset: &str) -> Result<()> {
+    let keyformat = zfs
+        .get_property(dataset, "keyformat")
+        .with_context(|| format!("query keyformat for {}", dataset))?;
+    if keyformat != "raw" {
+        return Err(anyhow!(
+            "Dataset {} reports keyformat={} (expected raw)",
+            dataset,
+            keyformat
+        ));
+    }
     Ok(())
 }
 

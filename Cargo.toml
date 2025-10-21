@@ -1,6 +1,6 @@
 [package]
 name = "zfs_beskar_key"
-version = "1.6.0"
+version = "1.6.1"
 edition = "2021"
 authors = ["x4ngus"]
 description = "ZFS Beskar Key: USB-first ZFS key management for the modern-day Bounty Hunter."
