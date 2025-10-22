@@ -4,6 +4,7 @@
 
 use crate::cmd::{Cmd, OutputData};
 use anyhow::{anyhow, Context, Result};
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -76,7 +77,11 @@ impl Zfs {
             .run(&["load-key", "-L", "prompt", dataset], Some(key))
             .context("zfs load-key")?;
         if out.status != 0 {
-            return Err(anyhow!("zfs load-key failed: {}", out.stderr));
+            let stderr = out.stderr.trim();
+            if stderr.contains("Key already loaded") {
+                return Ok(());
+            }
+            return Err(anyhow!("zfs load-key failed: {}", stderr));
         }
         Ok(())
     }
@@ -143,5 +148,123 @@ impl Zfs {
             ));
         }
         Ok(out.stdout.trim().to_string())
+    }
+
+    /// Attempt to load keys for the encryption root and any descendants sharing it.
+    /// Returns the list of datasets confirmed unlocked (root is always first).
+    pub fn load_key_tree(&self, root: &str, key: &[u8]) -> Result<Vec<String>> {
+        self.load_key(root, key)?;
+
+        let mut unlocked = vec![root.to_string()];
+
+        let pending_scan = self.locked_descendants(root)?;
+        if pending_scan.iter().any(|ds| ds == root) {
+            return Err(anyhow!(
+                "Encryption root {} still reports a sealed keystatus after load-key",
+                root
+            ));
+        }
+
+        let pending: Vec<String> = pending_scan.into_iter().filter(|ds| ds != root).collect();
+
+        if !pending.is_empty() {
+            for ds in pending.clone() {
+                self.load_key(&ds, key)?;
+                unlocked.push(ds);
+            }
+        }
+
+        let stubborn_scan = self.locked_descendants(root)?;
+        if stubborn_scan.iter().any(|ds| ds == root) {
+            return Err(anyhow!(
+                "Encryption root {} unexpectedly sealed after descendant retries",
+                root
+            ));
+        }
+
+        let stubborn: Vec<String> = stubborn_scan.into_iter().filter(|ds| ds != root).collect();
+        if !stubborn.is_empty() {
+            return Err(anyhow!(
+                "Datasets inheriting {} remain sealed after retries: {}",
+                root,
+                stubborn.join(", ")
+            ));
+        }
+
+        Ok(unlocked)
+    }
+
+    /// Return datasets under `root` that still report a sealed keystatus.
+    pub fn locked_descendants(&self, root: &str) -> Result<Vec<String>> {
+        let list = self.run(
+            &["list", "-H", "-r", "-o", "name,encryptionroot", root],
+            None,
+        )?;
+        if list.status != 0 {
+            return Err(anyhow!(
+                "zfs list encryption roots failed for {}: {}",
+                root,
+                list.stderr.trim()
+            ));
+        }
+        let mut same_root = HashSet::new();
+        for line in list.stdout.lines() {
+            let mut parts = line.split('\t');
+            if let (Some(name), Some(encryption_root)) = (parts.next(), parts.next()) {
+                if encryption_root == root {
+                    same_root.insert(name.to_string());
+                }
+            }
+        }
+        let status = self.run(
+            &["get", "-H", "-r", "-o", "name,value", "keystatus", root],
+            None,
+        )?;
+        if status.status != 0 {
+            return Err(anyhow!(
+                "zfs get keystatus failed for {}: {}",
+                root,
+                status.stderr.trim()
+            ));
+        }
+        let mut locked = Vec::new();
+        for line in status.stdout.lines() {
+            let mut parts = line.split('\t');
+            if let (Some(name), Some(value)) = (parts.next(), parts.next()) {
+                let trimmed = value.trim();
+                if same_root.contains(name)
+                    && trimmed != "available"
+                    && !trimmed.is_empty()
+                    && trimmed != "-"
+                    && trimmed != "none"
+                {
+                    locked.push(name.to_string());
+                }
+            }
+        }
+        Ok(locked)
+    }
+
+    /// Discover dataset by mountpoint (e.g., "/"). Returns the first match.
+    pub fn dataset_with_mountpoint(&self, mountpoint: &str) -> Result<Option<String>> {
+        let out = self.run(
+            &["list", "-H", "-o", "name,mountpoint", "-t", "filesystem"],
+            None,
+        )?;
+        if out.status != 0 {
+            return Err(anyhow!(
+                "zfs list mountpoints failed: {}",
+                out.stderr.trim()
+            ));
+        }
+        for line in out.stdout.lines() {
+            let mut parts = line.split('\t');
+            if let (Some(name), Some(mp)) = (parts.next(), parts.next()) {
+                if mp == mountpoint {
+                    return Ok(Some(name.to_string()));
+                }
+            }
+        }
+        Ok(None)
     }
 }

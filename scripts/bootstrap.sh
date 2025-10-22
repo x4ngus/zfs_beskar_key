@@ -120,7 +120,7 @@ fi
 [[ $EUID -eq 0 ]] || die "Run this script as root."
 [[ -x $BINARY ]] || die "$BINARY not found. Install zfs_beskar_key first."
 
-for cmd in lsblk blkid parted mkfs.ext4 udevadm sha256sum; do
+for cmd in lsblk blkid parted mkfs.ext4 udevadm sha256sum zfs; do
     require_cmd "$cmd"
 done
 
@@ -142,9 +142,16 @@ mounted_parts=$(lsblk -nrpo NAME,MOUNTPOINT "$DEVICE" | awk '$2 != "" {print $1"
 [[ -z ${mounted_parts:-} ]] || die "Device has mounted partitions: $mounted_parts"
 
 printf '\n'
-printf '%b' "${ACCENT}▸${RESET} Dataset to unlock [rpool/ROOT]: "
+DEFAULT_DATASET=$(zfs list -H -o name,mountpoint -t filesystem 2>/dev/null | awk -F '\t' '$2 == "/" {print $1; exit}')
+if [[ -z $DEFAULT_DATASET ]]; then
+    DEFAULT_DATASET="rpool/ROOT"
+else
+    info "Detected dataset $DEFAULT_DATASET mounted at /. Using it as the default forge target."
+fi
+
+printf '%b' "${ACCENT}▸${RESET} Dataset to unlock [$DEFAULT_DATASET]: "
 read -r DATASET_INPUT
-DATASET=${DATASET_INPUT:-rpool/ROOT}
+DATASET=${DATASET_INPUT:-$DEFAULT_DATASET}
 [[ -n $DATASET ]] || die "Dataset name must not be empty."
 
 printf '%b' "${ACCENT}▸${RESET} Invoke safe mode (manual confirmations, no forced wipe)? [y/N]: "

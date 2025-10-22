@@ -80,13 +80,31 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
     let binary_path = determine_binary_path(None)?;
 
-    let target_dataset = opts
-        .pool
-        .clone()
-        .unwrap_or_else(|| "rpool/ROOT".to_string());
-
     let zfs = Zfs::discover(Duration::from_secs(DEFAULT_TIMEOUT))
         .context("detect zfs binary for encryption checks")?;
+    let detected_root = match zfs.dataset_with_mountpoint("/") {
+        Ok(ds) => ds,
+        Err(err) => {
+            ui.warn(&format!(
+                "Unable to auto-detect dataset mounted at / ({}). Defaulting to rpool/ROOT.",
+                err
+            ));
+            None
+        }
+    };
+
+    let target_dataset = if let Some(dataset) = opts.pool.clone() {
+        dataset
+    } else if let Some(auto) = detected_root.clone() {
+        ui.info(&format!(
+            "Detected dataset {} mounted at /. Using it as the forge target.",
+            auto
+        ));
+        auto
+    } else {
+        "rpool/ROOT".to_string()
+    };
+
     let enc_root = match zfs.encryption_root(&target_dataset) {
         Ok(root) if !root.trim().is_empty() => root,
         Ok(_) => target_dataset.clone(),
@@ -923,17 +941,25 @@ fn apply_key_to_encryption_root(
         .with_context(|| format!("restore keylocation=prompt on {}", enc_root))?;
     verify_keyformat_raw(zfs, enc_root)?;
 
-    match zfs.load_key(enc_root, &key_material.raw[..]) {
-        Ok(_) => {
-            ui.success(&format!(
-                "Encryption root {} now recognizes the reforged key.",
-                enc_root
-            ));
+    match zfs.load_key_tree(enc_root, &key_material.raw[..]) {
+        Ok(unlocked) => {
+            let descendants = unlocked.iter().filter(|ds| *ds != enc_root).count();
+            if descendants > 0 {
+                ui.success(&format!(
+                    "Encryption root {} now recognizes the reforged key and released {} descendant dataset(s).",
+                    enc_root, descendants
+                ));
+            } else {
+                ui.success(&format!(
+                    "Encryption root {} now recognizes the reforged key.",
+                    enc_root
+                ));
+            }
             audit_log(
                 "INIT_ZFS_REKEY",
                 &format!(
-                    "encryption_root={} sha256={}",
-                    enc_root, key_material.sha256
+                    "encryption_root={} sha256={} descendants={}",
+                    enc_root, key_material.sha256, descendants
                 ),
             );
             Ok(())
@@ -972,7 +998,7 @@ fn apply_key_to_encryption_root(
                             enc_root, check_err
                         ));
                     }
-                    if let Err(load_err) = zfs.load_key(enc_root, &previous.raw[..]) {
+                    if let Err(load_err) = zfs.load_key_tree(enc_root, &previous.raw[..]) {
                         ui.warn(&format!(
                             "Reverted key could not be loaded automatically ({}).",
                             load_err

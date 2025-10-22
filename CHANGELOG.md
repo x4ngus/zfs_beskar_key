@@ -2,6 +2,24 @@
 
 ---
 
+## v1.6.2 — Forge Cascade
+**Date:** 2025-10-22  
+**Codename:** *Root Unseal*
+
+### Highlights
+
+- **Full tree unlock**  
+  - `auto-unlock` now loads the encryption root and any descendant datasets that share its key, covering Ubuntu boot environments like `rpool/ROOT/ubuntu_*` in one strike.
+- **Smarter forge defaults**  
+  - `init` and the bootstrapper auto-detect the dataset mounted at `/`, eliminating mismatched targets when the active boot environment lives beneath `rpool/ROOT`.
+
+### Fixes & Maintenance
+
+- Added `load_key_tree` and supporting helpers to spill the key across descendant datasets while respecting read-only property checks.
+- Stubborn descendants are retried with the same key material before the unlock sequence fails, guaranteeing Ubuntu child datasets gain the key even if ZFS delays their status flip.
+- Bootstrap script now requires `zfs`, lifts the detected root dataset as the suggested target, and continues to hand off to the Rust init flow.
+- Success audits track descendant unlock counts to aid forensic review.
+
 ## v1.6.1 — Raw Beskar Assay
 **Date:** 2025-10-21  
 **Codename:** *Raw Edge*

@@ -31,7 +31,7 @@ A USB-first ZFS unlock companion forged for dependable, unattended boots. Tribut
 curl -fsSL https://raw.githubusercontent.com/x4ngus/zfs_beskar_key/main/scripts/bootstrap.sh | sudo bash
 ```
 
-The script drives `zfs_beskar_key init` directly so the USB forge mirrors the Rust workflow—wiping the token, writing `/etc/zfs-beskar.toml`, installing systemd units, mounting `/run/beskar`, and optionally running `dracut -f`.
+The script drives `zfs_beskar_key init` directly so the USB forge mirrors the Rust workflow—auto-detecting the dataset mounted at `/`, wiping the token, writing `/etc/zfs-beskar.toml`, installing systemd units, mounting `/run/beskar`, and optionally running `dracut -f`.
 
 ### Alternative: build from source
 
@@ -101,6 +101,7 @@ sudo /usr/local/bin/zfs_beskar_key auto-unlock --dataset=rpool/ROOT --config=/et
 ## Operations
 
 - Rotate the key with `init --safe`, confirm prompts, rerun `doctor`, then replace the USB.
+- Auto-unlock now cascades across the encryption root and its descendants (e.g., `rpool/ROOT/ubuntu_*`), retrying stubborn children with the same key to ensure the stack unlocks together.
 - Launch `--menu` ▸ *Vault Drill* after hardware or initramfs changes to rehearse unlocks on a disposable pool.
 - Monitor `/var/log/beskar.log` for append-only audit entries.
 - Re-run `install-units` whenever datasets, USB devices, or binary paths change; `doctor` will verify unit sanity with `systemd-analyze`.
@@ -117,7 +118,7 @@ sudo /usr/local/bin/zfs_beskar_key auto-unlock --dataset=rpool/ROOT --config=/et
 
 ## Project Details
 
-- **Current release:** v1.6.1
+- **Current release:** v1.6.2
 - **License:** MIT (see `LICENSE`)
 - **Author:** Angus J.
 

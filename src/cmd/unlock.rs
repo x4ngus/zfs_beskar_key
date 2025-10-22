@@ -151,34 +151,60 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
             return Err(err);
         };
 
-        match zfs.load_key(&enc_root, &key_material[..]) {
-            Ok(_) => {
-                ui.success(&format!(
-                    "Key accepted. Encryption root {} now stands unlocked.",
-                    enc_root
-                ));
+        match zfs.load_key_tree(&enc_root, &key_material[..]) {
+            Ok(unlocked) => {
+                let descendants = unlocked.iter().filter(|ds| *ds != &enc_root).count();
+                if descendants > 0 {
+                    ui.success(&format!(
+                        "Key accepted. Encryption root {} and {} descendant dataset(s) now stand unlocked.",
+                        enc_root, descendants
+                    ));
+                } else {
+                    ui.success(&format!(
+                        "Key accepted. Encryption root {} now stands unlocked.",
+                        enc_root
+                    ));
+                }
                 if matches!(origin, KeyOrigin::Passphrase) {
                     ui.note("Fallback passphrase accepted. Replace or rebuild the beskar key at the earliest opportunity.");
                 }
-                audit_log("UNLOCK_OK", &format!("Unlocked {}", enc_root));
+                audit_log(
+                    "UNLOCK_OK",
+                    &format!(
+                        "Unlocked {} (descendants_unlocked={})",
+                        enc_root, descendants
+                    ),
+                );
                 lockout.reset(ui, timing);
                 return Ok(());
             }
-            Err(e) => {
-                ui.error(&format!("Unlock attempt on {} failed ({}).", enc_root, e));
+            Err(err) => {
+                let err_msg = err.to_string();
+                ui.error(&format!(
+                    "Unlock attempt on {} failed ({}).",
+                    enc_root, err_msg
+                ));
                 audit_log(
                     "UNLOCK_ATTEMPT_FAIL",
-                    &format!("Attempt {} failed for {}: {}", attempt, enc_root, e),
+                    &format!("Attempt {} failed for {}: {}", attempt, enc_root, err_msg),
                 );
 
                 let mut trigger_fallback = false;
                 if matches!(origin, KeyOrigin::Usb) && fallback_enabled {
                     audit_log(
                         "UNLOCK_USB_REJECTED",
-                        &format!("{} rejected USB key: {}", enc_root, e),
+                        &format!("{} rejected USB key: {}", enc_root, err_msg),
                     );
                     usb_available = false;
                     trigger_fallback = true;
+                } else if err_msg.contains("Key already loaded") {
+                    ui.note("ZFS reports the key was already resident; verification deferred to the self-test.");
+                    audit_log(
+                        "UNLOCK_OK_ALREADY",
+                        &format!("{} reports key already loaded", enc_root),
+                    );
+                    lockout.reset(ui, timing);
+                    return Ok(());
                 }
 
                 if attempt < MAX_ATTEMPTS {

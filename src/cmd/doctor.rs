@@ -203,11 +203,15 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
         Ok(client) => match client.encryption_root(&primary_dataset) {
             Ok(root) => {
                 if root != primary_dataset {
-                    let detail = format!(
-                        "{} anchored at encryption root {}",
-                        primary_dataset, root
-                    );
-                    if cfg.policy.datasets.first().map(|d| d != &root).unwrap_or(true) {
+                    let detail =
+                        format!("{} anchored at encryption root {}", primary_dataset, root);
+                    if cfg
+                        .policy
+                        .datasets
+                        .first()
+                        .map(|d| d != &root)
+                        .unwrap_or(true)
+                    {
                         cfg.policy.datasets.retain(|d| d != &root);
                         cfg.policy.datasets.insert(0, root.clone());
                         match persist_config(&cfg) {
