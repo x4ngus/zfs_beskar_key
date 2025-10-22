@@ -31,10 +31,12 @@ const BESKAR_LABEL: &str = "BESKARKEY";
 const DEFAULT_CONFIG_PATH: &str = "/etc/zfs-beskar.toml";
 const DEFAULT_ZFS_BIN: &str = "/sbin/zfs";
 const DEFAULT_TIMEOUT: u64 = 10;
-pub(crate) const DRACUT_MODULE_DIR: &str = "/usr/lib/dracut/modules.d/95beskar";
+pub(crate) const DRACUT_MODULE_DIR_PRIMARY: &str = "/usr/lib/dracut/modules.d/95beskar";
+pub(crate) const DRACUT_MODULE_DIR_FALLBACK: &str = "/lib/dracut/modules.d/95beskar";
 pub(crate) const DRACUT_SCRIPT_NAME: &str = "beskar-unlock.sh";
 pub(crate) const DRACUT_SETUP_NAME: &str = "module-setup.sh";
-
+pub(crate) const INITRAMFS_HOOK_PATH: &str = "/etc/initramfs-tools/hooks/zz-beskar";
+pub(crate) const INITRAMFS_LOCAL_TOP_PATH: &str = "/etc/initramfs-tools/scripts/local-top/beskar";
 const PARTED_BINARIES: &[&str] = &["/sbin/parted", "/usr/sbin/parted", "/usr/bin/parted"];
 const MKFS_BINARIES: &[&str] = &[
     "/sbin/mkfs.ext4",
@@ -46,6 +48,51 @@ const LSBLK_BINARIES: &[&str] = &["/bin/lsblk", "/usr/bin/lsblk"];
 const MOUNT_BINARIES: &[&str] = &["/bin/mount", "/usr/bin/mount"];
 const UMOUNT_BINARIES: &[&str] = &["/bin/umount", "/usr/bin/umount"];
 const UDEVADM_BINARIES: &[&str] = &["/sbin/udevadm", "/usr/sbin/udevadm", "/usr/bin/udevadm"];
+
+#[derive(Debug, Clone)]
+pub(crate) enum InitramfsFlavor {
+    Dracut(PathBuf),
+    InitramfsTools,
+}
+
+pub(crate) fn detect_initramfs_flavor() -> Result<InitramfsFlavor> {
+    let dracut_paths = ["/usr/bin/dracut", "/usr/sbin/dracut"];
+    let dracut_available = dracut_paths.iter().any(|p| Path::new(p).exists());
+    if dracut_available {
+        let primary_parent = Path::new(DRACUT_MODULE_DIR_PRIMARY)
+            .parent()
+            .map(Path::to_path_buf);
+        if let Some(parent) = primary_parent {
+            if parent.exists() {
+                return Ok(InitramfsFlavor::Dracut(PathBuf::from(
+                    DRACUT_MODULE_DIR_PRIMARY,
+                )));
+            }
+        }
+        let fallback_parent = Path::new(DRACUT_MODULE_DIR_FALLBACK)
+            .parent()
+            .map(Path::to_path_buf);
+        if let Some(parent) = fallback_parent {
+            if parent.exists() {
+                return Ok(InitramfsFlavor::Dracut(PathBuf::from(
+                    DRACUT_MODULE_DIR_FALLBACK,
+                )));
+            }
+        }
+        // Neither parent directory exists; default to primary path (will be created).
+        return Ok(InitramfsFlavor::Dracut(PathBuf::from(
+            DRACUT_MODULE_DIR_PRIMARY,
+        )));
+    }
+
+    if Path::new("/usr/sbin/update-initramfs").exists() {
+        return Ok(InitramfsFlavor::InitramfsTools);
+    }
+
+    Err(anyhow!(
+        "No supported initramfs tooling detected (neither dracut nor initramfs-tools present)."
+    ))
+}
 
 // ----------------------------------------------------------------------------
 // Struct for passing init options from main.rs
@@ -355,12 +402,26 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     audit_log("INIT_CFG", &format!("Created {}", config_path.display()));
     timing.pace(Pace::Info);
 
+    let initramfs_flavor =
+        detect_initramfs_flavor().context("detect initramfs tooling for auto-unlock")?;
+
     begin_phase(
         ui,
-        "Armor Fittings // Dracut Integration",
+        "Armor Fittings // Initramfs Integration",
         opts.confirm_each_phase,
     )?;
-    install_dracut_module(&enc_root, &config_path, &binary_path, ui)?;
+    match &initramfs_flavor {
+        InitramfsFlavor::Dracut(module_dir) => install_dracut_module(
+            module_dir.as_path(),
+            &enc_root,
+            &config_path,
+            &binary_path,
+            ui,
+        )?,
+        InitramfsFlavor::InitramfsTools => {
+            install_initramfs_tools_scripts(&enc_root, &config_path, &binary_path, ui)?
+        }
+    }
     timing.pace(Pace::Info);
 
     begin_phase(ui, "Clan Contingency", opts.confirm_each_phase)?;
@@ -380,17 +441,15 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     )?;
     if opts.offer_dracut_rebuild {
         ui.info("I recommend refreshing the forge molds immediately.");
-        match rebuild_initramfs(ui) {
+        match rebuild_initramfs(ui, &initramfs_flavor) {
             Ok(_) => ui.success("Initramfs reforged with the beskar module embedded."),
             Err(e) => {
                 ui.warn(&format!("Automatic initramfs rebuild failed ({}).", e));
-                ui.note("Run `dracut -f` manually once the issue is resolved.");
+                ui.note("Rebuild the initramfs manually once the issue is resolved.");
             }
         }
     } else {
-        ui.note(
-            "Dracut rebuild deferred — rerun with --offer-dracut-rebuild when you wish me to handle it.",
-        );
+        ui.note("Initramfs rebuild deferred — rerun with --offer-dracut-rebuild when you wish me to handle it.");
     }
 
     let usb_uuid = detect_partition_uuid(&usb_partition).unwrap_or_else(|_| "unknown".to_string());
@@ -1472,6 +1531,7 @@ fn device_has_mounts(node: &str) -> Result<bool> {
 }
 
 pub(crate) fn install_dracut_module(
+    module_dir: &Path,
     dataset: &str,
     config_path: &Path,
     binary_path: &Path,
@@ -1484,10 +1544,10 @@ pub(crate) fn install_dracut_module(
         ));
     }
 
-    fs::create_dir_all(DRACUT_MODULE_DIR).context("create dracut module directory")?;
+    fs::create_dir_all(module_dir).context("create dracut module directory")?;
 
-    let script_path = Path::new(DRACUT_MODULE_DIR).join(DRACUT_SCRIPT_NAME);
-    let setup_path = Path::new(DRACUT_MODULE_DIR).join(DRACUT_SETUP_NAME);
+    let script_path = module_dir.join(DRACUT_SCRIPT_NAME);
+    let setup_path = module_dir.join(DRACUT_SETUP_NAME);
 
     let script_content = format!(
         r#"#!/bin/bash
@@ -1569,35 +1629,173 @@ install() {{
     fs::set_permissions(&setup_path, Permissions::from_mode(0o750))
         .context("set module setup permissions")?;
 
-    ui.success(&format!("Dracut module reforged at {}.", DRACUT_MODULE_DIR));
+    ui.success(&format!(
+        "Dracut module reforged at {}.",
+        module_dir.display()
+    ));
     audit_log(
         "INIT_DRACUT_MODULE",
-        &format!("dataset={} module={}", dataset, DRACUT_MODULE_DIR),
+        &format!("dataset={} module={}", dataset, module_dir.display()),
     );
     Ok(())
 }
 
-pub(crate) fn rebuild_initramfs(ui: &UX) -> Result<()> {
+pub(crate) fn install_initramfs_tools_scripts(
+    dataset: &str,
+    config_path: &Path,
+    binary_path: &Path,
+    ui: &UX,
+) -> Result<()> {
+    if !binary_path.exists() {
+        return Err(anyhow!(
+            "zfs_beskar_key binary not found at {}",
+            binary_path.display()
+        ));
+    }
+
+    let hook_path = Path::new(INITRAMFS_HOOK_PATH);
+    if let Some(parent) = hook_path.parent() {
+        fs::create_dir_all(parent).context("create initramfs-tools hook directory")?;
+    }
+
+    let hook_content = format!(
+        r#"#!/bin/sh
+set -e
+
+. /usr/share/initramfs-tools/hook-functions
+
+copy_exec "{binary}" "{binary}"
+copy_file "{config}" "{config}"
+"#,
+        binary = binary_path.display(),
+        config = config_path.display()
+    );
+
+    let mut hook_file =
+        File::create(hook_path).with_context(|| format!("create {}", hook_path.display()))?;
+    hook_file.write_all(hook_content.as_bytes())?;
+    hook_file.sync_all().ok();
+    fs::set_permissions(hook_path, Permissions::from_mode(0o755))
+        .context("set initramfs hook permissions")?;
+
+    let local_top_path = Path::new(INITRAMFS_LOCAL_TOP_PATH);
+    if let Some(parent) = local_top_path.parent() {
+        fs::create_dir_all(parent).context("create initramfs-tools local-top directory")?;
+    }
+
+    let local_top_content = format!(
+        r#"#!/bin/sh
+set -e
+
+PREREQ=""
+
+prereqs() {{
+    echo "$PREREQ"
+}}
+
+case "$1" in
+    prereqs)
+        prereqs
+        exit 0
+        ;;
+esac
+
+TOKEN_LABEL="{label}"
+MOUNTPOINT="/run/beskar"
+CONFIG_PATH="{config}"
+DATASET="{dataset}"
+BINARY="{binary}"
+
+mkdir -p "$MOUNTPOINT"
+DEVICE="$(blkid -L "$TOKEN_LABEL" 2>/dev/null || true)"
+if [ -z "$DEVICE" ]; then
+    echo "beskar: token not detected; skipping auto-unlock" >&2
+    exit 0
+fi
+
+if ! mount -o ro "$DEVICE" "$MOUNTPOINT"; then
+    echo "beskar: unable to mount token at $MOUNTPOINT" >&2
+    exit 0
+fi
+
+if [ -x "$BINARY" ]; then
+    if ! "$BINARY" auto-unlock --config="$CONFIG_PATH" --dataset="$DATASET" --strict-usb --json; then
+        echo "beskar: auto-unlock invocation failed" >&2
+    fi
+else
+    echo "beskar: binary $BINARY unavailable in initramfs" >&2
+fi
+
+umount "$MOUNTPOINT" 2>/dev/null || true
+"#,
+        label = BESKAR_LABEL,
+        config = config_path.display(),
+        dataset = dataset,
+        binary = binary_path.display()
+    );
+
+    let mut local_top_file = File::create(local_top_path)
+        .with_context(|| format!("create {}", local_top_path.display()))?;
+    local_top_file.write_all(local_top_content.as_bytes())?;
+    local_top_file.sync_all().ok();
+    fs::set_permissions(local_top_path, Permissions::from_mode(0o755))
+        .context("set initramfs local-top permissions")?;
+
+    ui.success("Initramfs-tools scripts installed for beskar auto-unlock.");
+    audit_log(
+        "INIT_INITRAMFS_TOOLS",
+        &format!(
+            "dataset={} hook={} script={}",
+            dataset, INITRAMFS_HOOK_PATH, INITRAMFS_LOCAL_TOP_PATH
+        ),
+    );
+    Ok(())
+}
+
+pub(crate) fn rebuild_initramfs(ui: &UX, flavor: &InitramfsFlavor) -> Result<()> {
     use std::path::Path;
 
-    let candidates = ["/usr/bin/dracut", "/usr/sbin/dracut"];
-    let dracut_path = candidates
-        .iter()
-        .find(|p| Path::new(p).exists())
-        .ok_or_else(|| anyhow!("dracut binary not found on PATH {:?}", candidates))?;
+    match flavor {
+        InitramfsFlavor::Dracut(_) => {
+            let candidates = ["/usr/bin/dracut", "/usr/sbin/dracut"];
+            let dracut_path = candidates
+                .iter()
+                .find(|p| Path::new(p).exists())
+                .ok_or_else(|| anyhow!("dracut binary not found on PATH {:?}", candidates))?;
 
-    ui.info(&format!(
-        "Calling dracut via {} to refresh the initramfs image…",
-        dracut_path
-    ));
-    let cmd = Cmd::new_allowlisted(*dracut_path, Duration::from_secs(180))?;
-    let out = cmd.run(&["-f"], None)?;
-    if out.status != 0 {
-        return Err(anyhow!(
-            "dracut exited with status {}: {}",
-            out.status,
-            out.stderr.trim()
-        ));
+            ui.info(&format!(
+                "Calling dracut via {} to refresh the initramfs image…",
+                dracut_path
+            ));
+            let cmd = Cmd::new_allowlisted(*dracut_path, Duration::from_secs(180))?;
+            let out = cmd.run(&["-f"], None)?;
+            if out.status != 0 {
+                return Err(anyhow!(
+                    "dracut exited with status {}: {}",
+                    out.status,
+                    out.stderr.trim()
+                ));
+            }
+        }
+        InitramfsFlavor::InitramfsTools => {
+            let update_initramfs = "/usr/sbin/update-initramfs";
+            if !Path::new(update_initramfs).exists() {
+                return Err(anyhow!(
+                    "initramfs-tools detected but {} missing",
+                    update_initramfs
+                ));
+            }
+            ui.info("Calling update-initramfs -u to refresh the initramfs image…");
+            let cmd = Cmd::new_allowlisted(update_initramfs, Duration::from_secs(180))?;
+            let out = cmd.run(&["-u"], None)?;
+            if out.status != 0 {
+                return Err(anyhow!(
+                    "update-initramfs exited with status {}: {}",
+                    out.status,
+                    out.stderr.trim()
+                ));
+            }
+        }
     }
     Ok(())
 }
