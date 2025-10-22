@@ -1517,7 +1517,7 @@ if ! mount -o ro "$DEVICE" "$MOUNTPOINT"; then
 fi
 
 if [ -x "$BINARY" ]; then
-    "$BINARY" auto-unlock --config="$CONFIG_PATH" --dataset="$DATASET" --json || warn "Auto-unlock failed inside initramfs."
+    "$BINARY" auto-unlock --config="$CONFIG_PATH" --dataset="$DATASET" --strict-usb --json || warn "Auto-unlock failed inside initramfs."
 else
     warn "zfs_beskar_key binary unavailable in initramfs."
 fi
@@ -1550,7 +1550,7 @@ depends() {{
 }}
 
 install() {{
-    inst_multiple blkid mount umount systemd-ask-password
+    inst_multiple blkid mount umount
     inst_simple "$moddir/{script}" /sbin/{script}
     inst_simple "{binary}" "{binary}"
     inst_simple "{config}" "{config}"

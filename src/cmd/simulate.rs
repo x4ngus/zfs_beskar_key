@@ -2,7 +2,7 @@
 // src/cmd/simulate.rs – Ephemeral ZFS vault simulation for menu demos
 // ============================================================================
 
-use crate::cmd::{Cmd, OutputData};
+use crate::cmd::{unlock::UnlockOptions, Cmd, OutputData};
 use crate::config::{ConfigFile, CryptoCfg, Fallback, Policy, Usb};
 use crate::ui::{Pace, Timing, UX};
 use crate::zfs::Zfs;
@@ -40,7 +40,13 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
     timing.pace(Pace::Prompt);
 
     ui.phase("Vault Drill // USB-First Unseal");
-    match crate::cmd::unlock::run_unlock(ui, timing, &sim.config, &sim.dataset_name) {
+    match crate::cmd::unlock::run_unlock(
+        ui,
+        timing,
+        &sim.config,
+        &sim.dataset_name,
+        UnlockOptions::default(),
+    ) {
         Ok(_) => {
             let zfs = sim.zfs()?;
             if zfs.is_unlocked(&sim.dataset_name)? {

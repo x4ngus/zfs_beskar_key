@@ -16,11 +16,28 @@ use std::path::Path;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
+#[derive(Clone, Copy)]
+pub struct UnlockOptions {
+    pub strict_usb: bool,
+}
+
+impl Default for UnlockOptions {
+    fn default() -> Self {
+        Self { strict_usb: false }
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Public entrypoint
 // ----------------------------------------------------------------------------
 
-pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> Result<()> {
+pub fn run_unlock(
+    ui: &UX,
+    timing: &Timing,
+    cfg: &ConfigFile,
+    dataset: &str,
+    opts: UnlockOptions,
+) -> Result<()> {
     ui.banner();
     ui.info(&format!(
         "Initiating unlock sequence for dataset {}.",
@@ -77,8 +94,9 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
     let mut lockout = Lockout::new();
     let mut usb_available = true;
     let mut logged_usb_source = false;
-    let fallback_enabled = cfg.fallback.enabled;
+    let fallback_allowed = cfg.fallback.enabled && !opts.strict_usb;
     let mut fallback_primed = false;
+    let key_path = Path::new(&cfg.usb.key_hex_path);
 
     for attempt in 1..=MAX_ATTEMPTS {
         ui.info(&format!(
@@ -99,10 +117,15 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
                 Err(usb_err) => {
                     audit_log("UNLOCK_USB_UNAVAILABLE", &format!("reason={}", usb_err));
                     usb_available = false;
-                    if !fallback_enabled {
-                        ui.error(&format!("Unable to obtain key material ({}).", usb_err));
-                        audit_log("UNLOCK_KEY_FETCH_FAIL", &usb_err.to_string());
-                        return Err(usb_err);
+                    if !fallback_allowed {
+                        let err = anyhow!(
+                            "USB key material unavailable ({}). Strict USB mode forbids fallback. Key path: {}",
+                            usb_err,
+                            key_path.display()
+                        );
+                        ui.error(&err.to_string());
+                        audit_log("UNLOCK_KEY_FETCH_FAIL", &err.to_string());
+                        return Err(err);
                     }
                     ui.warn(&format!(
                         "USB key unavailable ({}); invoking the fallback passphrase ritual.",
@@ -122,12 +145,20 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
                             return Err(err);
                         }
                     };
+                    if passphrase.is_empty() {
+                        let err = anyhow!(
+                            "Fallback passphrase prompt returned empty input in response to USB failure."
+                        );
+                        ui.error(&err.to_string());
+                        audit_log("UNLOCK_KEY_FETCH_FAIL", &err.to_string());
+                        return Err(err);
+                    }
                     fallback_primed = true;
                     audit_log("UNLOCK_FALLBACK_USED", "Fallback passphrase requested");
                     (passphrase, KeyOrigin::Passphrase)
                 }
             }
-        } else if fallback_enabled {
+        } else if fallback_allowed {
             if !fallback_primed {
                 ui.warn("USB key rejected; invoking fallback passphrase ritual.");
                 fallback_primed = true;
@@ -142,10 +173,20 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
                     return Err(err);
                 }
             };
+            if passphrase.is_empty() {
+                let err =
+                    anyhow!("Fallback passphrase prompt returned empty input; aborting unlock.");
+                ui.error(&err.to_string());
+                audit_log("UNLOCK_KEY_FETCH_FAIL", &err.to_string());
+                return Err(err);
+            }
             audit_log("UNLOCK_FALLBACK_USED", "Fallback passphrase requested");
             (passphrase, KeyOrigin::Passphrase)
         } else {
-            let err = anyhow!("No key material sources remain for {}", enc_root);
+            let err = anyhow!(
+                "No key material sources remain for {}. USB-only mode is active and fallback is disabled.",
+                enc_root
+            );
             ui.error(&err.to_string());
             audit_log("UNLOCK_KEY_FETCH_FAIL", &err.to_string());
             return Err(err);
@@ -190,7 +231,7 @@ pub fn run_unlock(ui: &UX, timing: &Timing, cfg: &ConfigFile, dataset: &str) -> 
                 );
 
                 let mut trigger_fallback = false;
-                if matches!(origin, KeyOrigin::Usb) && fallback_enabled {
+                if matches!(origin, KeyOrigin::Usb) && fallback_allowed {
                     audit_log(
                         "UNLOCK_USB_REJECTED",
                         &format!("{} rejected USB key: {}", enc_root, err_msg),

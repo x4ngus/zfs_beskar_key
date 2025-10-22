@@ -463,14 +463,40 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     let script_path = module_dir.join(DRACUT_SCRIPT_NAME);
     let setup_path = module_dir.join(DRACUT_SETUP_NAME);
     if module_dir.exists() && script_path.exists() && setup_path.exists() {
-        log_entry(
-            &mut report,
-            ui,
-            timing,
-            "Dracut module",
-            Status::Pass,
-            format!("{} ready", DRACUT_MODULE_DIR),
-        );
+        match fs::read_to_string(&script_path) {
+            Ok(content) if content.contains("--strict-usb") => log_entry(
+                &mut report,
+                ui,
+                timing,
+                "Dracut module",
+                Status::Pass,
+                format!("{} ready", DRACUT_MODULE_DIR),
+            ),
+            Ok(_) | Err(_) => {
+                match install_dracut_module(&primary_encryption_root, config_path, &binary_path, ui)
+                {
+                    Ok(_) => {
+                        need_dracut = true;
+                        log_entry(
+                            &mut report,
+                            ui,
+                            timing,
+                            "Dracut module",
+                            Status::Fixed,
+                            "Module refreshed to enforce strict USB unlock.".to_string(),
+                        );
+                    }
+                    Err(err) => log_entry(
+                        &mut report,
+                        ui,
+                        timing,
+                        "Dracut module",
+                        Status::Fail,
+                        format!("Unable to reinstall module: {}", err),
+                    ),
+                }
+            }
+        }
     } else {
         match install_dracut_module(&primary_encryption_root, config_path, &binary_path, ui) {
             Ok(_) => {

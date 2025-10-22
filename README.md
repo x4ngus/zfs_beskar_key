@@ -102,6 +102,7 @@ sudo /usr/local/bin/zfs_beskar_key auto-unlock --dataset=rpool/ROOT --config=/et
 
 - Rotate the key with `init --safe`, confirm prompts, rerun `doctor`, then replace the USB.
 - Auto-unlock now cascades across the encryption root and its descendants (e.g., `rpool/ROOT/ubuntu_*`), retrying stubborn children with the same key to ensure the stack unlocks together.
+- Use `auto-unlock --strict-usb` on a running system to mirror initramfs behaviour and confirm the USB token alone can restore the pool.
 - Launch `--menu` ▸ *Vault Drill* after hardware or initramfs changes to rehearse unlocks on a disposable pool.
 - Monitor `/var/log/beskar.log` for append-only audit entries.
 - Re-run `install-units` whenever datasets, USB devices, or binary paths change; `doctor` will verify unit sanity with `systemd-analyze`.

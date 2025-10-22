@@ -17,6 +17,7 @@
 
 - Added `load_key_tree` and supporting helpers to spill the key across descendant datasets while respecting read-only property checks.
 - Stubborn descendants are retried with the same key material before the unlock sequence fails, guaranteeing Ubuntu child datasets gain the key even if ZFS delays their status flip.
+- Introduced a USB-only (`--strict-usb`) unlock path that disables systemd passphrase fallbacks in initramfs; doctor now verifies the dracut module enforces it.
 - Bootstrap script now requires `zfs`, lifts the detected root dataset as the suggested target, and continues to hand off to the Rust init flow.
 - Success audits track descendant unlock counts to aid forensic review.
 

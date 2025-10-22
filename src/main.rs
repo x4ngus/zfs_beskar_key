@@ -9,6 +9,7 @@ mod ui;
 mod util;
 mod zfs;
 
+use crate::cmd::unlock::UnlockOptions;
 use crate::config::ConfigFile;
 use crate::util::binary::determine_binary_path;
 use anyhow::{anyhow, Context, Result};
@@ -81,7 +82,11 @@ enum Commands {
         key_hex: Option<String>,
     },
     Lock,
-    AutoUnlock,
+    AutoUnlock {
+        /// USB-only mode for initramfs: disable passphrase fallback.
+        #[arg(long)]
+        strict_usb: bool,
+    },
     Doctor,
     InstallUnits,
     SelfTest,
@@ -198,7 +203,7 @@ fn dispatch_command(
 
         Commands::Unlock { key_hex: _ } => {
             let dataset = resolve_dataset(&cli.dataset, cfg)?;
-            cmd::unlock::run_unlock(ui, timing, cfg, &dataset)?;
+            cmd::unlock::run_unlock(ui, timing, cfg, &dataset, UnlockOptions::default())?;
         }
 
         Commands::Lock => {
@@ -215,9 +220,12 @@ fn dispatch_command(
             timing.pace(Pace::Critical);
         }
 
-        Commands::AutoUnlock => {
+        Commands::AutoUnlock { strict_usb } => {
             let dataset = resolve_dataset(&cli.dataset, cfg)?;
-            cmd::unlock::run_unlock(ui, timing, cfg, &dataset)?;
+            let opts = UnlockOptions {
+                strict_usb: *strict_usb,
+            };
+            cmd::unlock::run_unlock(ui, timing, cfg, &dataset, opts)?;
         }
 
         Commands::Doctor => {
@@ -246,7 +254,7 @@ fn dispatch_command(
             if !zfs.is_unlocked(&enc_root)? {
                 ui.info("Key withdrawn from memory space.");
             }
-            match cmd::unlock::run_unlock(ui, timing, cfg, &enc_root) {
+            match cmd::unlock::run_unlock(ui, timing, cfg, &enc_root, UnlockOptions::default()) {
                 Ok(_) => {
                     ui.success("Self-test passed; the auto-unlock path holds.");
                     timing.pace(Pace::Prompt);
