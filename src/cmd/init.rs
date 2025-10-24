@@ -80,7 +80,6 @@ pub struct InitOptions {
     pub key_path: Option<PathBuf>,
     pub force: bool,
     pub auto_unlock: bool,
-    pub offer_dracut_rebuild: bool,
     pub confirm_each_phase: bool,
 }
 
@@ -421,24 +420,15 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         "Clan Briefing // Initramfs Advisory",
         opts.confirm_each_phase,
     )?;
-    if opts.offer_dracut_rebuild {
-        ui.info("I recommend refreshing the forge molds immediately.");
-        match rebuild_initramfs(ui, &initramfs_flavor) {
-            Ok(_) => ui.success("Initramfs reforged with the beskar module embedded."),
-            Err(e) => {
-                ui.warn(&format!("Automatic initramfs rebuild failed ({}).", e));
-                ui.note(
-                    "Manual fallback: run `zfs_beskar_key install-dracut` followed by `sudo dracut -f`.",
-                );
-            }
+    ui.info("Refreshing the forge molds immediately.");
+    match rebuild_initramfs(ui, &initramfs_flavor) {
+        Ok(_) => ui.success("Initramfs reforged with the beskar module embedded."),
+        Err(e) => {
+            ui.warn(&format!("Automatic initramfs rebuild failed ({}).", e));
+            ui.note(
+                "Manual fallback: run `zfs_beskar_key install-dracut` followed by `sudo dracut -f`.",
+            );
         }
-    } else {
-        ui.note(
-            "Initramfs rebuild deferred — rerun with --offer-dracut-rebuild when you wish me to handle it.",
-        );
-        ui.note(
-            "Manual path: execute `zfs_beskar_key install-dracut` and then `sudo dracut -f` to embed the module.",
-        );
     }
 
     let usb_uuid = detect_partition_uuid(&usb_partition).unwrap_or_else(|_| "unknown".to_string());
@@ -460,7 +450,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     );
 
     ui.success("The beskar plating is secured. Defensive routines now await deployment.");
-    ui.note("Marching orders: run `zfs_beskar_key doctor`, then `zfs_beskar_key install-dracut` and `sudo dracut -f` to bake the initramfs. This is the Way.");
+    ui.note("Marching orders: run `zfs_beskar_key doctor` to confirm the initramfs health, then drill as desired. This is the Way.");
     audit_log(
         "INIT_COMPLETE",
         &format!(
@@ -1587,8 +1577,6 @@ esac
 
 TOKEN_LABEL="{label}"
 MOUNTPOINT="{mountpoint}"
-mounted=false
-
 mkdir -p "$MOUNTPOINT"
 DEVICE="$(blkid -L "$TOKEN_LABEL" 2>/dev/null || true)"
 if [ -z "$DEVICE" ]; then
@@ -1600,14 +1588,6 @@ if ! mount -o ro "$DEVICE" "$MOUNTPOINT"; then
     echo "beskar: unable to mount token at $MOUNTPOINT" >&2
     exit 0
 fi
-
-mounted=true
-cleanup() {{
-    if $mounted; then
-        umount "$MOUNTPOINT" 2>/dev/null || true
-    fi
-}}
-trap cleanup EXIT
 
 if ! zfs load-key -a; then
     echo "beskar: zfs load-key -a failed; fallback to native prompts." >&2

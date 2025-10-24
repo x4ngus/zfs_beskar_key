@@ -72,10 +72,6 @@ enum Commands {
         /// Safe mode: prompt before each forge phase and skip forced wipe.
         #[arg(long)]
         safe: bool,
-
-        /// Skip automatic dracut rebuild after forge completes.
-        #[arg(long)]
-        skip_dracut: bool,
     },
     ForgeKey,
     Unlock {
@@ -182,7 +178,6 @@ fn dispatch_command(
             usb_device,
             key_path,
             safe,
-            skip_dracut,
         } => {
             let opts = cmd::init::InitOptions {
                 pool: cli.dataset.clone(),
@@ -190,7 +185,6 @@ fn dispatch_command(
                 key_path: key_path.clone(),
                 force: !safe,
                 auto_unlock: true,
-                offer_dracut_rebuild: !skip_dracut,
                 confirm_each_phase: *safe,
             };
             cmd::init::run_init(ui, timing, opts)?;
@@ -293,7 +287,6 @@ fn dispatch_menu_choice(
                 key_path: None,
                 force: true,
                 auto_unlock: true,
-                offer_dracut_rebuild: true,
                 confirm_each_phase: false,
             };
             cmd::init::run_init(ui, timing, opts)?;
@@ -305,7 +298,6 @@ fn dispatch_menu_choice(
                 key_path: None,
                 force: false,
                 auto_unlock: true,
-                offer_dracut_rebuild: true,
                 confirm_each_phase: true,
             };
             cmd::init::run_init(ui, timing, opts)?;

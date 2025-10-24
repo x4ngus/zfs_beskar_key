@@ -1,0 +1,17 @@
+[Unit]
+Description=Mount Beskar key token (v{{VERSION}})
+DefaultDependencies=no
+After=systemd-udevd.service systemd-udev-settle.service
+Before=zfs-load-key.service initrd-root-fs.target
+Wants=systemd-udev-settle.service
+ConditionPathExists=/dev/disk/by-label/{{TOKEN_LABEL}}
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/mkdir -p "{{MOUNTPOINT}}"
+ExecStart=/bin/mount -o ro,nosuid,nodev,noexec /dev/disk/by-label/{{TOKEN_LABEL}} "{{MOUNTPOINT}}"
+ExecStop=/bin/umount "{{MOUNTPOINT}}"
+
+[Install]
+WantedBy=initrd-root-fs.target

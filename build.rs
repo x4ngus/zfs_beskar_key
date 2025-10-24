@@ -12,12 +12,8 @@ fn main() {
             "src/dracut/templates/module-setup.sh",
         ),
         (
-            "UNLOCK_SCRIPT_TEMPLATE",
-            "src/dracut/templates/beskar-unlock.sh",
-        ),
-        (
-            "UNLOCK_SERVICE_TEMPLATE",
-            "src/dracut/templates/beskar-unlock.service",
+            "MOUNT_SERVICE_TEMPLATE",
+            "src/dracut/templates/beskar-mount.service",
         ),
     ];
 
