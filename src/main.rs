@@ -4,6 +4,7 @@
 
 mod cmd;
 mod config;
+mod dracut;
 mod menu;
 mod ui;
 mod util;
@@ -89,6 +90,7 @@ enum Commands {
     },
     Doctor,
     InstallUnits,
+    InstallDracut,
     SelfTest,
 }
 
@@ -236,6 +238,10 @@ fn dispatch_command(
             let binary_path = determine_binary_path(Some(cfg))?;
             cmd::repair::install_units(ui, cfg, &binary_path)?;
             ui.success("Systemd sentries posted. This is the Way.");
+            timing.pace(Pace::Prompt);
+        }
+        Commands::InstallDracut => {
+            cmd::dracut_install::run(ui, cfg, cli.dataset.as_deref(), None)?;
             timing.pace(Pace::Prompt);
         }
 

@@ -19,6 +19,7 @@ use zeroize::Zeroizing;
 
 use crate::cmd::{Cmd, OutputData};
 use crate::config::{ConfigFile, CryptoCfg, Fallback, Policy, Usb};
+use crate::dracut::{self, ModuleContext, ModulePaths};
 use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
@@ -27,14 +28,10 @@ use crate::zfs::Zfs;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::collections::HashMap;
 
-const BESKAR_LABEL: &str = "BESKARKEY";
+const BESKAR_LABEL: &str = crate::dracut::BESKAR_TOKEN_LABEL;
 const DEFAULT_CONFIG_PATH: &str = "/etc/zfs-beskar.toml";
 const DEFAULT_ZFS_BIN: &str = "/sbin/zfs";
 const DEFAULT_TIMEOUT: u64 = 10;
-pub(crate) const DRACUT_MODULE_DIR_PRIMARY: &str = "/usr/lib/dracut/modules.d/95beskar";
-pub(crate) const DRACUT_MODULE_DIR_FALLBACK: &str = "/lib/dracut/modules.d/95beskar";
-pub(crate) const DRACUT_SCRIPT_NAME: &str = "beskar-unlock.sh";
-pub(crate) const DRACUT_SETUP_NAME: &str = "module-setup.sh";
 pub(crate) const INITRAMFS_HOOK_PATH: &str = "/etc/initramfs-tools/hooks/zz-beskar";
 pub(crate) const INITRAMFS_LOCAL_TOP_PATH: &str = "/etc/initramfs-tools/scripts/local-top/beskar";
 const PARTED_BINARIES: &[&str] = &["/sbin/parted", "/usr/sbin/parted", "/usr/bin/parted"];
@@ -59,30 +56,7 @@ pub(crate) fn detect_initramfs_flavor() -> Result<InitramfsFlavor> {
     let dracut_paths = ["/usr/bin/dracut", "/usr/sbin/dracut"];
     let dracut_available = dracut_paths.iter().any(|p| Path::new(p).exists());
     if dracut_available {
-        let primary_parent = Path::new(DRACUT_MODULE_DIR_PRIMARY)
-            .parent()
-            .map(Path::to_path_buf);
-        if let Some(parent) = primary_parent {
-            if parent.exists() {
-                return Ok(InitramfsFlavor::Dracut(PathBuf::from(
-                    DRACUT_MODULE_DIR_PRIMARY,
-                )));
-            }
-        }
-        let fallback_parent = Path::new(DRACUT_MODULE_DIR_FALLBACK)
-            .parent()
-            .map(Path::to_path_buf);
-        if let Some(parent) = fallback_parent {
-            if parent.exists() {
-                return Ok(InitramfsFlavor::Dracut(PathBuf::from(
-                    DRACUT_MODULE_DIR_FALLBACK,
-                )));
-            }
-        }
-        // Neither parent directory exists; default to primary path (will be created).
-        return Ok(InitramfsFlavor::Dracut(PathBuf::from(
-            DRACUT_MODULE_DIR_PRIMARY,
-        )));
+        return Ok(InitramfsFlavor::Dracut(dracut::preferred_module_dir()));
     }
 
     if Path::new("/usr/sbin/update-initramfs").exists() {
@@ -411,12 +385,11 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         opts.confirm_each_phase,
     )?;
     match &initramfs_flavor {
-        InitramfsFlavor::Dracut(module_dir) => install_dracut_module(
-            module_dir.as_path(),
-            &enc_root,
-            &config_path,
-            &binary_path,
+        InitramfsFlavor::Dracut(_) => crate::cmd::dracut_install::install_for_dataset(
             ui,
+            &config,
+            Some(&enc_root),
+            Some(initramfs_flavor.clone()),
         )?,
         InitramfsFlavor::InitramfsTools => {
             install_initramfs_tools_scripts(&enc_root, &config_path, &binary_path, ui)?
@@ -445,11 +418,18 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
             Ok(_) => ui.success("Initramfs reforged with the beskar module embedded."),
             Err(e) => {
                 ui.warn(&format!("Automatic initramfs rebuild failed ({}).", e));
-                ui.note("Rebuild the initramfs manually once the issue is resolved.");
+                ui.note(
+                    "Manual fallback: run `zfs_beskar_key install-dracut` followed by `sudo dracut -f`.",
+                );
             }
         }
     } else {
-        ui.note("Initramfs rebuild deferred — rerun with --offer-dracut-rebuild when you wish me to handle it.");
+        ui.note(
+            "Initramfs rebuild deferred — rerun with --offer-dracut-rebuild when you wish me to handle it.",
+        );
+        ui.note(
+            "Manual path: execute `zfs_beskar_key install-dracut` and then `sudo dracut -f` to embed the module.",
+        );
     }
 
     let usb_uuid = detect_partition_uuid(&usb_partition).unwrap_or_else(|_| "unknown".to_string());
@@ -471,7 +451,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     );
 
     ui.success("The beskar plating is secured. Defensive routines now await deployment.");
-    ui.note("Marching orders: run `zbk doctor`, then rebuild initramfs to honor the forge. This is the Way.");
+    ui.note("Marching orders: run `zfs_beskar_key doctor`, then `zfs_beskar_key install-dracut` and `sudo dracut -f` to bake the initramfs. This is the Way.");
     audit_log(
         "INIT_COMPLETE",
         &format!(
@@ -1544,90 +1524,14 @@ pub(crate) fn install_dracut_module(
         ));
     }
 
-    fs::create_dir_all(module_dir).context("create dracut module directory")?;
+    let module_paths = ModulePaths::new(module_dir);
+    let ctx = ModuleContext {
+        dataset,
+        config_path,
+        binary_path,
+    };
 
-    let script_path = module_dir.join(DRACUT_SCRIPT_NAME);
-    let setup_path = module_dir.join(DRACUT_SETUP_NAME);
-
-    let script_content = format!(
-        r#"#!/bin/bash
-
-set -e
-
-if ! type warn >/dev/null 2>&1; then
-    warn() {{ echo "[BESKAR] ${{*}}" >&2; }}
-fi
-
-TOKEN_LABEL="{label}"
-MOUNTPOINT="/run/beskar"
-CONFIG_PATH="{config}"
-DATASET="{dataset}"
-BINARY="{binary}"
-
-mkdir -p "$MOUNTPOINT"
-DEVICE=$(blkid -L $TOKEN_LABEL 2>/dev/null || true)
-if [ -z "$DEVICE" ]; then
-    warn "Beskar token not detected; skipping initramfs unlock."
-    exit 0
-fi
-
-if ! mount -o ro "$DEVICE" "$MOUNTPOINT"; then
-    warn "Unable to mount Beskar token inside initramfs."
-    exit 0
-fi
-
-if [ -x "$BINARY" ]; then
-    "$BINARY" auto-unlock --config="$CONFIG_PATH" --dataset="$DATASET" --strict-usb --json || warn "Auto-unlock failed inside initramfs."
-else
-    warn "zfs_beskar_key binary unavailable in initramfs."
-fi
-
-umount "$MOUNTPOINT" || warn "Failed to unmount Beskar token in initramfs."
-"#,
-        label = BESKAR_LABEL,
-        config = config_path.display(),
-        dataset = dataset,
-        binary = binary_path.display()
-    );
-
-    let mut script_file =
-        File::create(&script_path).with_context(|| format!("create {}", script_path.display()))?;
-    script_file.write_all(script_content.as_bytes())?;
-    script_file.sync_all().ok();
-    fs::set_permissions(&script_path, Permissions::from_mode(0o750))
-        .context("set dracut script permissions")?;
-
-    let setup_content = format!(
-        r#"#!/bin/bash
-
-check() {{
-    return 0
-}}
-
-depends() {{
-    echo systemd
-    return 0
-}}
-
-install() {{
-    inst_multiple blkid mount umount
-    inst_simple "$moddir/{script}" /sbin/{script}
-    inst_simple "{binary}" "{binary}"
-    inst_simple "{config}" "{config}"
-    inst_hook initqueue/online 95 "$moddir/{script}"
-}}
-"#,
-        script = DRACUT_SCRIPT_NAME,
-        config = config_path.display(),
-        binary = binary_path.display(),
-    );
-
-    let mut setup_file =
-        File::create(&setup_path).with_context(|| format!("create {}", setup_path.display()))?;
-    setup_file.write_all(setup_content.as_bytes())?;
-    setup_file.sync_all().ok();
-    fs::set_permissions(&setup_path, Permissions::from_mode(0o750))
-        .context("set module setup permissions")?;
+    dracut::install_module(&module_paths, &ctx)?;
 
     ui.success(&format!(
         "Dracut module reforged at {}.",
@@ -1687,7 +1591,7 @@ copy_file "{config}" "{config}"
         r#"#!/bin/sh
 set -e
 
-PREREQ=""
+PREREQ="zfs"
 
 prereqs() {{
     echo "$PREREQ"

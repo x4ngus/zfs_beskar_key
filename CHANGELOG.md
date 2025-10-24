@@ -2,6 +2,22 @@
 
 ---
 
+## v1.6.4 — Initrd Gauntlet
+**Date:** 2025-10-23  
+**Codename:** *Module Stamp*
+
+### Highlights
+
+- **Automated dracut deployment**  
+  - `zfs_beskar_key init` now reuses the same install flow as the CLI subcommand, emitting the Beskar dracut module and immediately forcing `dracut -f` so freshly forged keys are baked into the initramfs without extra operator work.
+- **Template relocation**  
+  - Dracut assets moved into `src/dracut/templates`, embedded at build time to prevent drift between releases and keep module contents aligned with the running binary.
+
+### Fixes & Maintenance
+
+- Doctor messaging now mirrors the new workflow, telling operators to replay `install-dracut` and `dracut -f` when manual intervention is still required.
+- Initramfs-tools scripts declare `PREREQ="zfs"` so they queue behind the upstream ZFS copy stage, matching Ubuntu 25.10 expectations.
+
 ## v1.6.2 — Forge Cascade
 **Date:** 2025-10-22  
 **Codename:** *Root Unseal*

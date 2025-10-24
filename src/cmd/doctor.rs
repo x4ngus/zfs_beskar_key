@@ -4,12 +4,12 @@
 
 use crate::cmd::init::{
     detect_initramfs_flavor, install_dracut_module, install_initramfs_tools_scripts,
-    rebuild_initramfs, InitramfsFlavor, DRACUT_SCRIPT_NAME, DRACUT_SETUP_NAME, INITRAMFS_HOOK_PATH,
-    INITRAMFS_LOCAL_TOP_PATH,
+    rebuild_initramfs, InitramfsFlavor, INITRAMFS_HOOK_PATH, INITRAMFS_LOCAL_TOP_PATH,
 };
 use crate::cmd::repair::{self, USB_MOUNT_UNIT};
 use crate::cmd::Cmd;
 use crate::config::ConfigFile;
+use crate::dracut::{self, ModuleContext, ModulePaths};
 use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
@@ -492,50 +492,46 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     // ---------------------------------------------------------------------
     match &initramfs_flavor {
         Some(InitramfsFlavor::Dracut(module_dir)) => {
-            let script_path = module_dir.join(DRACUT_SCRIPT_NAME);
-            let setup_path = module_dir.join(DRACUT_SETUP_NAME);
-            if module_dir.exists() && script_path.exists() && setup_path.exists() {
-                match fs::read_to_string(&script_path) {
-                    Ok(content) if content.contains("--strict-usb") => log_entry(
-                        &mut report,
-                        ui,
-                        timing,
-                        "Initramfs module",
-                        Status::Pass,
-                        format!("{} ready", module_dir.display()),
-                    ),
-                    Ok(_) | Err(_) => {
-                        match install_dracut_module(
-                            module_dir.as_path(),
-                            &primary_encryption_root,
-                            config_path,
-                            &binary_path,
+            let module_paths = ModulePaths::new(module_dir);
+            let ctx = ModuleContext {
+                dataset: &primary_encryption_root,
+                config_path,
+                binary_path: binary_path.as_path(),
+            };
+
+            let module_exists = module_paths.root.exists();
+
+            let needs_reinstall = if module_exists {
+                match dracut::module_is_current(&module_paths, &ctx) {
+                    Ok(true) => {
+                        log_entry(
+                            &mut report,
                             ui,
-                        ) {
-                            Ok(_) => {
-                                need_initramfs_refresh = true;
-                                log_entry(
-                                    &mut report,
-                                    ui,
-                                    timing,
-                                    "Initramfs module",
-                                    Status::Fixed,
-                                    "Dracut module refreshed to enforce strict USB unlock."
-                                        .to_string(),
-                                );
-                            }
-                            Err(err) => log_entry(
-                                &mut report,
-                                ui,
-                                timing,
-                                "Initramfs module",
-                                Status::Fail,
-                                format!("Unable to reinstall dracut module: {}", err),
-                            ),
-                        }
+                            timing,
+                            "Initramfs module",
+                            Status::Pass,
+                            format!("{} ready", module_dir.display()),
+                        );
+                        false
+                    }
+                    Ok(false) => true,
+                    Err(err) => {
+                        log_entry(
+                            &mut report,
+                            ui,
+                            timing,
+                            "Initramfs module",
+                            Status::Warn,
+                            format!("Unable to verify dracut module: {}", err),
+                        );
+                        true
                     }
                 }
             } else {
+                true
+            };
+
+            if needs_reinstall {
                 match install_dracut_module(
                     module_dir.as_path(),
                     &primary_encryption_root,
@@ -545,13 +541,22 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
                 ) {
                     Ok(_) => {
                         need_initramfs_refresh = true;
+                        let detail = if module_exists {
+                            "Dracut module refreshed to enforce strict USB unlock. Manual replay: `zfs_beskar_key install-dracut` && `sudo dracut -f`."
+                                .to_string()
+                        } else {
+                            format!(
+                                "Dracut module installed at {}. Manual replay: `zfs_beskar_key install-dracut` && `sudo dracut -f`.",
+                                module_dir.display()
+                            )
+                        };
                         log_entry(
                             &mut report,
                             ui,
                             timing,
                             "Initramfs module",
                             Status::Fixed,
-                            format!("Dracut module installed at {}.", module_dir.display()),
+                            detail,
                         );
                     }
                     Err(err) => log_entry(
@@ -808,7 +813,10 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
                 timing,
                 "Initramfs",
                 Status::Warn,
-                format!("Initramfs rebuild failed: {}", err),
+                format!(
+                    "Initramfs rebuild failed: {} (try `zfs_beskar_key install-dracut` && `sudo dracut -f`).",
+                    err
+                ),
             ),
             None => log_entry(
                 &mut report,
@@ -816,8 +824,13 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
                 timing,
                 "Initramfs",
                 Status::Warn,
-                "Initramfs tooling not detected; rebuild skipped.".to_string(),
+                "Initramfs tooling not detected; rebuild skipped — rerun once dracut is available.".to_string(),
             ),
+        }
+        if matches!(initramfs_flavor, Some(InitramfsFlavor::Dracut(_))) {
+            ui.note(
+                "Follow-up: `zfs_beskar_key install-dracut` then `sudo dracut -f` ensure the refreshed module lands in initramfs.",
+            );
         }
     }
 
