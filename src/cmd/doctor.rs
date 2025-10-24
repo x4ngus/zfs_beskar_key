@@ -580,10 +580,12 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     // ---------------------------------------------------------------------
     match &initramfs_flavor {
         Some(InitramfsFlavor::Dracut(module_dir)) => {
-            let module_paths = ModulePaths::new(module_dir);
             let mountpoint_owned = key_runtime_dir.to_string_lossy().into_owned();
+            let unit_name = dracut::derive_mount_unit_name(&mountpoint_owned);
+            let module_paths = ModulePaths::new(module_dir, &unit_name);
             let ctx = ModuleContext {
                 mountpoint: &mountpoint_owned,
+                unit_name,
             };
 
             let module_exists = module_paths.root.exists();

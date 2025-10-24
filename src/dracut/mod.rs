@@ -9,7 +9,6 @@ include!(concat!(env!("OUT_DIR"), "/dracut_templates.rs"));
 pub(crate) const MODULE_DIR_PRIMARY: &str = "/usr/lib/dracut/modules.d/90zfs-beskar";
 pub(crate) const MODULE_DIR_FALLBACK: &str = "/lib/dracut/modules.d/90zfs-beskar";
 pub(crate) const BESKAR_TOKEN_LABEL: &str = "BESKARKEY";
-pub(crate) const SERVICE_NAME: &str = "beskar-mount.service";
 pub(crate) const SETUP_NAME: &str = "module-setup.sh";
 pub(crate) const DEFAULT_MOUNTPOINT: &str = "/run/beskar";
 
@@ -18,26 +17,27 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleContext<'a> {
     pub mountpoint: &'a str,
+    pub unit_name: String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ExpectedModule {
-    pub service: String,
+    pub mount_unit: String,
     pub setup: String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ModulePaths {
     pub root: PathBuf,
-    pub service: PathBuf,
+    pub mount_unit: PathBuf,
     pub setup: PathBuf,
 }
 
 impl ModulePaths {
-    pub fn new<P: AsRef<Path>>(root: P) -> Self {
+    pub fn new<P: AsRef<Path>>(root: P, unit_name: &str) -> Self {
         let root = root.as_ref().to_path_buf();
         Self {
-            service: root.join(SERVICE_NAME),
+            mount_unit: root.join(unit_name),
             setup: root.join(SETUP_NAME),
             root,
         }
@@ -79,7 +79,7 @@ pub(crate) fn preferred_module_dir() -> PathBuf {
 pub(crate) fn expected_module(ctx: &ModuleContext<'_>) -> ExpectedModule {
     let replacements = replacements(ctx);
     ExpectedModule {
-        service: render_template(MOUNT_SERVICE_TEMPLATE, &replacements),
+        mount_unit: render_template(MOUNT_UNIT_TEMPLATE, &replacements),
         setup: render_template(MODULE_SETUP_TEMPLATE, &replacements),
     }
 }
@@ -90,16 +90,16 @@ pub(crate) fn module_is_current(
 ) -> Result<bool> {
     let expected = expected_module(ctx);
 
-    if !module_paths.service.exists() || !module_paths.setup.exists() {
+    if !module_paths.mount_unit.exists() || !module_paths.setup.exists() {
         return Ok(false);
     }
 
-    let service = fs::read_to_string(&module_paths.service)
-        .with_context(|| format!("read {}", module_paths.service.display()))?;
+    let mount_unit = fs::read_to_string(&module_paths.mount_unit)
+        .with_context(|| format!("read {}", module_paths.mount_unit.display()))?;
     let setup = fs::read_to_string(&module_paths.setup)
         .with_context(|| format!("read {}", module_paths.setup.display()))?;
 
-    Ok(service == expected.service && setup == expected.setup)
+    Ok(mount_unit == expected.mount_unit && setup == expected.setup)
 }
 
 pub(crate) fn install_module(module_paths: &ModulePaths, ctx: &ModuleContext<'_>) -> Result<()> {
@@ -112,7 +112,7 @@ pub(crate) fn install_module(module_paths: &ModulePaths, ctx: &ModuleContext<'_>
 
     let expected = expected_module(ctx);
 
-    write_file(&module_paths.service, &expected.service, 0o644)?;
+    write_file(&module_paths.mount_unit, &expected.mount_unit, 0o644)?;
     write_file(&module_paths.setup, &expected.setup, 0o750)?;
 
     Ok(())
@@ -123,8 +123,25 @@ fn replacements(ctx: &ModuleContext<'_>) -> Vec<(&'static str, String)> {
         ("VERSION", VERSION.to_string()),
         ("TOKEN_LABEL", BESKAR_TOKEN_LABEL.to_string()),
         ("MOUNTPOINT", ctx.mountpoint.to_string()),
-        ("SERVICE_NAME", SERVICE_NAME.to_string()),
+        ("MOUNT_UNIT_NAME", ctx.unit_name.clone()),
     ]
+}
+
+pub(crate) fn derive_mount_unit_name(mountpoint: &str) -> String {
+    let trimmed = mountpoint.trim_start_matches('/');
+    if trimmed.is_empty() {
+        return String::from("-.mount");
+    }
+    let mut escaped = String::new();
+    for ch in trimmed.chars() {
+        match ch {
+            '/' => escaped.push('-'),
+            '-' => escaped.push_str("\\x2d"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped.push_str(".mount");
+    escaped
 }
 
 fn render_template(template: &str, replacements: &[(&str, String)]) -> String {

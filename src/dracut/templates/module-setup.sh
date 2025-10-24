@@ -8,7 +8,7 @@ depends() {
 
 install() {
     inst_multiple blkid mount umount mkdir zfs
-    inst_simple "$moddir/{{SERVICE_NAME}}" "$systemdsystemunitdir/{{SERVICE_NAME}}"
+    inst_simple "$moddir/{{MOUNT_UNIT_NAME}}" "$systemdsystemunitdir/{{MOUNT_UNIT_NAME}}"
     mkdir -p "$systemdsystemunitdir/initrd-root-fs.target.wants"
-    ln -sf "../{{SERVICE_NAME}}" "$systemdsystemunitdir/initrd-root-fs.target.wants/{{SERVICE_NAME}}"
+    ln -sf "../{{MOUNT_UNIT_NAME}}" "$systemdsystemunitdir/initrd-root-fs.target.wants/{{MOUNT_UNIT_NAME}}"
 }

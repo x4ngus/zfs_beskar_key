@@ -2,6 +2,22 @@
 
 ---
 
+## v1.7.1 — Persistent Forge
+**Date:** 2025-10-23  
+**Codename:** *Mount Sentinel*
+
+### Highlights
+
+- **Persistent initramfs mount**  
+  - Beskar now drops a native systemd `.mount` unit (and matching initramfs-tools hook) that keeps `/run/beskar` mounted before `zfs-load-key` fires, resolving the "key hasn’t appeared" race on Ubuntu 25.10.
+- **Hands-free rebuilds**  
+  - `zfs_beskar_key init` and the bootstrapper always rebuild the initramfs after stamping the module, leaving no manual `install-dracut`/`dracut -f` steps.
+
+### Fixes & Maintenance
+
+- Doctor leverages the shared installer, regenerating the mount unit and initramfs scripts when they drift while ensuring `keylocation` stays aligned with the runtime mount path.
+- Initramfs-tools local-top script mirrors the dracut behaviour without unmounting, guaranteeing the key file persists until the real root is available.
+
 ## v1.7.0 — Ubuntu Lockstep
 **Date:** 2025-10-23  
 **Codename:** *Load-Key Gauntlet*

@@ -12,12 +12,12 @@ A USB-first ZFS unlock companion forged for dependable, unattended boots. Tribut
 
 `zfs_beskar_key` unlocks encrypted ZFS datasets from a dedicated USB key while keeping a secured passphrase fallback online. Configuration lives in `/etc/zfs-beskar.toml`; commands default to strict permissions and atomic writes.
 
-### Release highlights (v1.7.0)
+### Release highlights (v1.7.1)
 
 - Dracut assets now ship from `src/dracut/templates`, guaranteeing consistent module generation.
-- Forge runs automatically stamp the dracut module, set `keylocation=file:///run/beskar/<key>`, and force `dracut -f`, so the initramfs always carries the refreshed key without extra operator steps.
-- Initramfs unlock now mounts the Beskar token and defers to `zfs load-key -a`, matching Ubuntu 25.10’s native workflow and eliminating the `Raw key too short` failure.
-- Doctor enforces the same contract—repairing `keylocation`, templating hooks, and rebuilding the initramfs-tools scripts when they drift.
+- Forge runs automatically stamp the Beskar module, set `keylocation=file:///run/beskar/<key>`, and force `dracut -f`, so the initramfs always carries the refreshed key without extra operator steps.
+- The initramfs now keeps the Beskar token mounted via a dedicated systemd mount unit (and matching initramfs-tools hook) before `zfs load-key -a` runs, eliminating the missing key race seen on Ubuntu 25.10.
+- Doctor enforces the same contract—repairing `keylocation`, templating hooks/mount units, and rebuilding the initramfs scripts when they drift.
 
 ---
 
@@ -111,7 +111,7 @@ sudo /usr/local/bin/zfs_beskar_key auto-unlock --dataset=rpool/ROOT --config=/et
 - Auto-unlock now cascades across the encryption root and its descendants (e.g., `rpool/ROOT/ubuntu_*`), retrying stubborn children with the same key to ensure the stack unlocks together.
 - Use `auto-unlock --strict-usb` on a running system to mirror initramfs behaviour and confirm the USB token alone can restore the pool.
 - The forge installs whichever early-boot framework you use (dracut or initramfs-tools) so the strict USB unlock fires before root mounts.
-- Every forge run auto-installs the dracut module (when present), sets `keylocation=file:///run/beskar/<key>` (or your configured path), and forces `dracut -f`, matching the dedicated `install-dracut` command.
+- Every forge run auto-installs the Beskar mount unit (when dracut is present), sets `keylocation=file:///run/beskar/<key>` (or your configured path), and forces `dracut -f`, matching the dedicated `install-dracut` command.
 - Launch `--menu` ▸ *Vault Drill* after hardware or initramfs changes to rehearse unlocks on a disposable pool.
 - Monitor `/var/log/beskar.log` for append-only audit entries.
 - Re-run `install-units` whenever datasets, USB devices, or binary paths change; `doctor` will verify unit sanity with `systemd-analyze`.
@@ -128,7 +128,7 @@ sudo /usr/local/bin/zfs_beskar_key auto-unlock --dataset=rpool/ROOT --config=/et
 
 ## Project Details
 
-- **Current release:** v1.7.0
+- **Current release:** v1.7.1
 - **License:** MIT (see `LICENSE`)
 - **Author:** Angus J.
 

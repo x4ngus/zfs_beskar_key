@@ -4,7 +4,7 @@
 
 use crate::cmd::init::{detect_initramfs_flavor, rebuild_initramfs, InitramfsFlavor};
 use crate::config::ConfigFile;
-use crate::dracut::{self, ModuleContext, ModulePaths, DEFAULT_MOUNTPOINT};
+use crate::dracut::{self, derive_mount_unit_name, ModuleContext, ModulePaths, DEFAULT_MOUNTPOINT};
 use crate::ui::UX;
 use crate::zfs::Zfs;
 use anyhow::{anyhow, Context, Result};
@@ -82,6 +82,7 @@ pub fn install_for_dataset(
         .parent()
         .unwrap_or_else(|| Path::new(DEFAULT_MOUNTPOINT));
     let mountpoint_owned = mountpoint_path.to_string_lossy().into_owned();
+    let unit_name = derive_mount_unit_name(&mountpoint_owned);
     let key_location = format!("file://{}", key_path.display());
 
     client
@@ -106,9 +107,10 @@ pub fn install_for_dataset(
         }
     };
 
-    let module_paths = ModulePaths::new(&module_dir);
+    let module_paths = ModulePaths::new(&module_dir, &unit_name);
     let ctx = ModuleContext {
         mountpoint: &mountpoint_owned,
+        unit_name,
     };
 
     dracut::install_module(&module_paths, &ctx)?;

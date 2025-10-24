@@ -1584,7 +1584,9 @@ if [ -z "$DEVICE" ]; then
     exit 0
 fi
 
-if ! mount -o ro "$DEVICE" "$MOUNTPOINT"; then
+if mountpoint -q "$MOUNTPOINT"; then
+    echo "beskar: token already mounted at $MOUNTPOINT" >&2
+elif ! mount -o ro "$DEVICE" "$MOUNTPOINT"; then
     echo "beskar: unable to mount token at $MOUNTPOINT" >&2
     exit 0
 fi
