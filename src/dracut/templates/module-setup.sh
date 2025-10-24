@@ -12,11 +12,9 @@ depends() {
 }
 
 install() {
-    inst_multiple blkid mount umount
+    inst_multiple blkid mount umount zfs
     inst_simple "$moddir/{{SCRIPT_NAME}}" "/sbin/{{SCRIPT_NAME}}"
     inst_simple "$moddir/{{SERVICE_NAME}}" "$systemdsystemunitdir/{{SERVICE_NAME}}"
-    inst_simple "{{BINARY_PATH}}" "{{BINARY_PATH}}"
-    inst_simple "{{CONFIG_PATH}}" "{{CONFIG_PATH}}"
     mkdir -p "$systemdsystemunitdir/initrd.target.wants"
     ln -sf "../{{SERVICE_NAME}}" "$systemdsystemunitdir/initrd.target.wants/{{SERVICE_NAME}}"
 }

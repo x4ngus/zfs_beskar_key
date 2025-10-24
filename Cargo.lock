@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "zfs_beskar_key"
-version = "1.6.4"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "chrono",

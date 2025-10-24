@@ -2,12 +2,13 @@
 // src/cmd/dracut_install.rs – Dedicated dracut installer subcommand
 // ============================================================================
 
-use crate::cmd::init::{detect_initramfs_flavor, install_dracut_module, InitramfsFlavor};
+use crate::cmd::init::{detect_initramfs_flavor, rebuild_initramfs, InitramfsFlavor};
 use crate::config::ConfigFile;
+use crate::dracut::{self, ModuleContext, ModulePaths, DEFAULT_MOUNTPOINT};
 use crate::ui::UX;
-use crate::util::binary::determine_binary_path;
 use crate::zfs::Zfs;
 use anyhow::{anyhow, Context, Result};
+use std::path::Path;
 use std::time::Duration;
 
 pub fn run(
@@ -32,7 +33,7 @@ pub fn install_for_dataset(
         .unwrap_or_else(|| "rpool/ROOT".to_string());
 
     ui.info(&format!(
-        "Preparing Beskar dracut module targeting dataset {}.",
+        "Preparing Ubuntu-style unlock for dataset {}.",
         dataset_hint
     ));
 
@@ -70,15 +71,34 @@ pub fn install_for_dataset(
         ));
     }
 
-    let binary_path = determine_binary_path(Some(cfg))?;
+    let key_path = Path::new(&cfg.usb.key_hex_path);
+    if !key_path.is_absolute() {
+        return Err(anyhow!(
+            "usb.key_hex_path ({}) must be an absolute path.",
+            key_path.display()
+        ));
+    }
+    let mountpoint_path = key_path
+        .parent()
+        .unwrap_or_else(|| Path::new(DEFAULT_MOUNTPOINT));
+    let mountpoint_owned = mountpoint_path.to_string_lossy().into_owned();
+    let key_location = format!("file://{}", key_path.display());
+
+    client
+        .set_property(&encryption_root, "keylocation", &key_location)
+        .with_context(|| format!("set keylocation on {}", encryption_root))?;
+    ui.info(&format!(
+        "keylocation for {} set to {}.",
+        encryption_root, key_location
+    ));
 
     let flavor = match flavor_hint {
         Some(f) => f,
         None => detect_initramfs_flavor()?,
     };
 
-    let module_dir = match flavor {
-        InitramfsFlavor::Dracut(path) => path,
+    let module_dir = match &flavor {
+        InitramfsFlavor::Dracut(path) => path.clone(),
         InitramfsFlavor::InitramfsTools => {
             return Err(anyhow!(
             "initramfs-tools detected; dracut module installation not applicable on this system."
@@ -86,19 +106,19 @@ pub fn install_for_dataset(
         }
     };
 
-    ui.info(&format!(
-        "Installing dracut payload at {}.",
+    let module_paths = ModulePaths::new(&module_dir);
+    let ctx = ModuleContext {
+        mountpoint: &mountpoint_owned,
+    };
+
+    dracut::install_module(&module_paths, &ctx)?;
+    ui.success(&format!(
+        "Dracut module stamped at {}.",
         module_dir.display()
     ));
 
-    install_dracut_module(
-        module_dir.as_path(),
-        &encryption_root,
-        cfg.path.as_path(),
-        binary_path.as_path(),
-        ui,
-    )?;
+    rebuild_initramfs(ui, &flavor).context("invoke dracut -f for updated Beskar module")?;
+    ui.success("dracut -f completed with Beskar module embedded.");
 
-    ui.note("Initramfs rebuild will run automatically; rerun `dracut -f` manually if it fails.");
     Ok(())
 }

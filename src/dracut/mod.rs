@@ -12,14 +12,13 @@ pub(crate) const BESKAR_TOKEN_LABEL: &str = "BESKARKEY";
 pub(crate) const SCRIPT_NAME: &str = "beskar-unlock.sh";
 pub(crate) const SERVICE_NAME: &str = "beskar-unlock.service";
 pub(crate) const SETUP_NAME: &str = "module-setup.sh";
+pub(crate) const DEFAULT_MOUNTPOINT: &str = "/run/beskar";
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleContext<'a> {
-    pub dataset: &'a str,
-    pub config_path: &'a Path,
-    pub binary_path: &'a Path,
+    pub mountpoint: &'a str,
 }
 
 #[derive(Debug, Clone)]
@@ -134,9 +133,7 @@ fn replacements(ctx: &ModuleContext<'_>) -> Vec<(&'static str, String)> {
     vec![
         ("VERSION", VERSION.to_string()),
         ("TOKEN_LABEL", BESKAR_TOKEN_LABEL.to_string()),
-        ("CONFIG_PATH", ctx.config_path.display().to_string()),
-        ("DATASET", ctx.dataset.to_string()),
-        ("BINARY_PATH", ctx.binary_path.display().to_string()),
+        ("MOUNTPOINT", ctx.mountpoint.to_string()),
         ("SCRIPT_NAME", SCRIPT_NAME.to_string()),
         ("SERVICE_NAME", SERVICE_NAME.to_string()),
     ]

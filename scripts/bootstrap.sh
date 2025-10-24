@@ -15,6 +15,8 @@ version_output=$("$BINARY" --version 2>/dev/null | awk 'NR==1 {print $NF}' || tr
 readonly APP_VERSION="${APP_VERSION:-${version_output:-unknown}}"
 readonly OPERATOR="${OPERATOR:-${USER:-$(id -un 2>/dev/null || echo "unknown")}}"
 
+mkdir -p "$RUN_DIR"
+
 if command -v tput >/dev/null 2>&1; then
     RESET=$(tput sgr0)
 else
@@ -120,6 +122,8 @@ fi
 [[ $EUID -eq 0 ]] || die "Run this script as root."
 [[ -x $BINARY ]] || die "$BINARY not found. Install zfs_beskar_key first."
 
+mkdir -p "$RUN_DIR"
+
 for cmd in lsblk blkid parted mkfs.ext4 udevadm sha256sum zfs; do
     require_cmd "$cmd"
 done
@@ -161,13 +165,6 @@ if [[ ${safe_answer,,} == "y" ]]; then
     SAFE_FLAG=(--safe)
 fi
 
-printf '%b' "${ACCENT}▸${RESET} Skip automatic dracut rebuild after forge? [y/N]: "
-read -r skip_dracut_answer
-DRACUT_FLAG=()
-if [[ ${skip_dracut_answer,,} == "y" ]]; then
-    DRACUT_FLAG=(--skip-dracut)
-fi
-
 printf '\n'
 info "Summoning the Rust armorer (v${APP_VERSION}) for a unified forge…"
 INIT_CMD=(
@@ -177,12 +174,21 @@ INIT_CMD=(
     init
     "--usb-device" "$DEVICE"
     "${SAFE_FLAG[@]}"
-    "${DRACUT_FLAG[@]}"
 )
 
 if ! "${INIT_CMD[@]}"; then
     die "Rust forge failed; inspect the output above before retrying."
 fi
+
+ENCRYPTION_ROOT=$(zfs get -H -o value encryptionroot "$DATASET" 2>/dev/null | awk 'NR==1 {print $1}' || true)
+if [[ -z ${ENCRYPTION_ROOT:-} || ${ENCRYPTION_ROOT} == "-" ]]; then
+    ENCRYPTION_ROOT="$DATASET"
+fi
+KEY_LOCATION=$(zfs get -H -o value keylocation "$ENCRYPTION_ROOT" 2>/dev/null | awk 'NR==1 {print $1}' || true)
+if [[ -n ${KEY_LOCATION:-} ]]; then
+    info "Encryption root $ENCRYPTION_ROOT now advertises keylocation=$KEY_LOCATION."
+fi
+success "Init run stamped the Beskar dracut module and rebuilt the initramfs (Ubuntu load-key flow active)."
 
 printf '\n'
 info "Deploying systemd sentries for unattended unlock…"

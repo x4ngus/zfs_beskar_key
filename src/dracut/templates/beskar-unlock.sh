@@ -7,10 +7,7 @@ if ! command -v warn >/dev/null 2>&1; then
 fi
 
 TOKEN_LABEL="{{TOKEN_LABEL}}"
-MOUNTPOINT="/run/beskar"
-CONFIG_PATH="{{CONFIG_PATH}}"
-DATASET="{{DATASET}}"
-BINARY="{{BINARY_PATH}}"
+MOUNTPOINT="{{MOUNTPOINT}}"
 
 mkdir -p "$MOUNTPOINT"
 DEVICE="$(blkid -L "$TOKEN_LABEL" 2>/dev/null || true)"
@@ -19,17 +16,20 @@ if [ -z "$DEVICE" ]; then
     exit 0
 fi
 
+mounted=false
+cleanup() {
+    if $mounted; then
+        umount "$MOUNTPOINT" || warn "Failed to unmount Beskar token in initramfs."
+    fi
+}
+trap cleanup EXIT
+
 if ! mount -o ro "$DEVICE" "$MOUNTPOINT"; then
     warn "Unable to mount Beskar token inside initramfs."
     exit 0
 fi
+mounted=true
 
-if [ -x "$BINARY" ]; then
-    if ! "$BINARY" auto-unlock --config="$CONFIG_PATH" --dataset="$DATASET" --strict-usb --json; then
-        warn "Auto-unlock failed inside initramfs."
-    fi
-else
-    warn "zfs_beskar_key binary unavailable in initramfs."
+if ! zfs load-key -a; then
+    warn "zfs load-key -a returned an error; falling back to native prompts."
 fi
-
-umount "$MOUNTPOINT" || warn "Failed to unmount Beskar token in initramfs."

@@ -2,14 +2,15 @@
 // src/cmd/doctor.rs – Verify and repair Beskar environment
 // ============================================================================
 
+use crate::cmd::dracut_install;
 use crate::cmd::init::{
-    detect_initramfs_flavor, install_dracut_module, install_initramfs_tools_scripts,
-    rebuild_initramfs, InitramfsFlavor, INITRAMFS_HOOK_PATH, INITRAMFS_LOCAL_TOP_PATH,
+    detect_initramfs_flavor, install_initramfs_tools_scripts, rebuild_initramfs, InitramfsFlavor,
+    INITRAMFS_HOOK_PATH, INITRAMFS_LOCAL_TOP_PATH,
 };
 use crate::cmd::repair::{self, USB_MOUNT_UNIT};
 use crate::cmd::Cmd;
 use crate::config::ConfigFile;
-use crate::dracut::{self, ModuleContext, ModulePaths};
+use crate::dracut::{self, ModuleContext, ModulePaths, DEFAULT_MOUNTPOINT};
 use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
@@ -19,11 +20,10 @@ use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const CONFIG_PATH: &str = "/etc/zfs-beskar.toml";
-const KEY_RUNTIME_DIR: &str = "/run/beskar";
 const UNLOCK_UNIT_NAME: &str = "beskar-unlock.service";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,6 +195,12 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
         }
     };
 
+    let key_path = Path::new(&cfg.usb.key_hex_path);
+    let key_runtime_dir: PathBuf = key_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_MOUNTPOINT));
+
     if cfg.policy.datasets.is_empty() {
         log_entry(
             &mut report,
@@ -308,6 +314,75 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
         ),
     }
 
+    let expected_keylocation = format!("file://{}", key_path.display());
+    if key_path.is_absolute() {
+        match zfs_client.as_ref() {
+            Ok(client) => match client.get_property(&primary_encryption_root, "keylocation") {
+                Ok(current) if current.eq_ignore_ascii_case(&expected_keylocation) => log_entry(
+                    &mut report,
+                    ui,
+                    timing,
+                    "Keylocation",
+                    Status::Pass,
+                    format!("{}", current),
+                ),
+                Ok(_) => match client.set_property(
+                    &primary_encryption_root,
+                    "keylocation",
+                    &expected_keylocation,
+                ) {
+                    Ok(_) => log_entry(
+                        &mut report,
+                        ui,
+                        timing,
+                        "Keylocation",
+                        Status::Fixed,
+                        format!("Aligned to {}", expected_keylocation),
+                    ),
+                    Err(err) => log_entry(
+                        &mut report,
+                        ui,
+                        timing,
+                        "Keylocation",
+                        Status::Warn,
+                        format!(
+                            "Unable to set keylocation to {}: {}",
+                            expected_keylocation, err
+                        ),
+                    ),
+                },
+                Err(err) => log_entry(
+                    &mut report,
+                    ui,
+                    timing,
+                    "Keylocation",
+                    Status::Warn,
+                    format!("Unable to query keylocation: {}", err),
+                ),
+            },
+            Err(err) => log_entry(
+                &mut report,
+                ui,
+                timing,
+                "Keylocation",
+                Status::Warn,
+                format!("ZFS unavailable to verify keylocation: {}", err),
+            ),
+        }
+    } else {
+        log_entry(
+            &mut report,
+            ui,
+            timing,
+            "Keylocation",
+            Status::Warn,
+            format!(
+                "usb.key_hex_path ({}) is not absolute; update config to file:///path",
+                cfg.usb.key_hex_path
+            ),
+        );
+    }
+
     let binary_path = match determine_binary_path(Some(&cfg)) {
         Ok(path) => path,
         Err(err) => {
@@ -362,7 +437,6 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     // ---------------------------------------------------------------------
     // Verify key material
     // ---------------------------------------------------------------------
-    let key_path = Path::new(&cfg.usb.key_hex_path);
     if !key_path.exists() {
         log_entry(
             &mut report,
@@ -454,26 +528,37 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
         }
     }
 
-    // Ensure /run/beskar exists
-    let run_dir = Path::new(KEY_RUNTIME_DIR);
-    if !run_dir.exists() {
-        if let Err(err) = fs::create_dir_all(run_dir) {
-            log_entry(
-                &mut report,
-                ui,
-                timing,
-                "Runtime directory",
-                Status::Warn,
-                format!("Failed to create {}: {}", run_dir.display(), err),
-            );
+    // Ensure runtime mount directory exists
+    let run_dir = key_runtime_dir.as_path();
+    if run_dir.is_absolute() {
+        if !run_dir.exists() {
+            if let Err(err) = fs::create_dir_all(run_dir) {
+                log_entry(
+                    &mut report,
+                    ui,
+                    timing,
+                    "Runtime directory",
+                    Status::Warn,
+                    format!("Failed to create {}: {}", run_dir.display(), err),
+                );
+            } else {
+                log_entry(
+                    &mut report,
+                    ui,
+                    timing,
+                    "Runtime directory",
+                    Status::Fixed,
+                    format!("Created {}", run_dir.display()),
+                );
+            }
         } else {
             log_entry(
                 &mut report,
                 ui,
                 timing,
                 "Runtime directory",
-                Status::Fixed,
-                format!("Created {}", run_dir.display()),
+                Status::Pass,
+                format!("{} present", run_dir.display()),
             );
         }
     } else {
@@ -482,8 +567,11 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
             ui,
             timing,
             "Runtime directory",
-            Status::Pass,
-            format!("{} present", run_dir.display()),
+            Status::Warn,
+            format!(
+                "Runtime mount path {} is relative; adjust usb.key_hex_path",
+                key_runtime_dir.display()
+            ),
         );
     }
 
@@ -493,10 +581,9 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     match &initramfs_flavor {
         Some(InitramfsFlavor::Dracut(module_dir)) => {
             let module_paths = ModulePaths::new(module_dir);
+            let mountpoint_owned = key_runtime_dir.to_string_lossy().into_owned();
             let ctx = ModuleContext {
-                dataset: &primary_encryption_root,
-                config_path,
-                binary_path: binary_path.as_path(),
+                mountpoint: &mountpoint_owned,
             };
 
             let module_exists = module_paths.root.exists();
@@ -532,21 +619,18 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
             };
 
             if needs_reinstall {
-                match install_dracut_module(
-                    module_dir.as_path(),
-                    &primary_encryption_root,
-                    config_path,
-                    &binary_path,
+                match dracut_install::install_for_dataset(
                     ui,
+                    &cfg,
+                    Some(&primary_encryption_root),
+                    Some(InitramfsFlavor::Dracut(module_dir.clone())),
                 ) {
                     Ok(_) => {
-                        need_initramfs_refresh = true;
                         let detail = if module_exists {
-                            "Dracut module refreshed to enforce strict USB unlock. Manual replay: `zfs_beskar_key install-dracut` && `sudo dracut -f`."
-                                .to_string()
+                            "Dracut module refreshed and dracut -f executed for Ubuntu-style unlock.".to_string()
                         } else {
                             format!(
-                                "Dracut module installed at {}. Manual replay: `zfs_beskar_key install-dracut` && `sudo dracut -f`.",
+                                "Dracut module installed at {} with dracut -f.",
                                 module_dir.display()
                             )
                         };
@@ -573,13 +657,13 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
         Some(InitramfsFlavor::InitramfsTools) => {
             let hook_exists = Path::new(INITRAMFS_HOOK_PATH).exists();
             let local_top_exists = Path::new(INITRAMFS_LOCAL_TOP_PATH).exists();
-            let strict = hook_exists
+            let ubuntu_style = hook_exists
                 && local_top_exists
                 && fs::read_to_string(INITRAMFS_LOCAL_TOP_PATH)
-                    .map(|content| content.contains("--strict-usb"))
+                    .map(|content| content.contains("zfs load-key -a"))
                     .unwrap_or(false);
 
-            if hook_exists && local_top_exists && strict {
+            if hook_exists && local_top_exists && ubuntu_style {
                 log_entry(
                     &mut report,
                     ui,
@@ -589,12 +673,7 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
                     "initramfs-tools scripts present".to_string(),
                 );
             } else {
-                match install_initramfs_tools_scripts(
-                    &primary_encryption_root,
-                    config_path,
-                    &binary_path,
-                    ui,
-                ) {
+                match install_initramfs_tools_scripts(key_runtime_dir.as_path(), ui) {
                     Ok(_) => {
                         need_initramfs_refresh = true;
                         log_entry(

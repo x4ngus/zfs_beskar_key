@@ -2,6 +2,24 @@
 
 ---
 
+## v1.7.0 — Ubuntu Lockstep
+**Date:** 2025-10-23  
+**Codename:** *Load-Key Gauntlet*
+
+### Highlights
+
+- **Ubuntu-aligned unlock path**  
+  - Beskar now mounts the USB token and delegates to `zfs load-key -a`, relying on `keylocation=file:///run/beskar/<key>` so the initramfs behaves exactly like Ubuntu 25.10’s native flow.
+- **Hands-free initramfs refresh**  
+  - `init` and the bootstrapper write the Beskar dracut module and immediately force `dracut -f`, eliminating the manual `install-dracut`/`dracut`/`update-initramfs -u` steps that previously caused boot lockouts.
+- **Keylocation enforcement**  
+  - `doctor` and the dracut installer keep the encryption root’s `keylocation` in sync with the runtime mount path, guaranteeing `zfs load-key -a` finds the key file during early boot.
+
+### Fixes & Maintenance
+
+- Initramfs-tools hooks now mirror the dracut behaviour—mounting the token and calling `zfs load-key -a`—while bundling all required helpers (`blkid`, `mount`, `umount`, `zfs`).
+- Unlock routines feed ZFS the expected 64-character hex key material, matching the new initramfs flow.
+
 ## v1.6.4 — Initrd Gauntlet
 **Date:** 2025-10-23  
 **Codename:** *Module Stamp*

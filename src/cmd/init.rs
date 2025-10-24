@@ -19,7 +19,6 @@ use zeroize::Zeroizing;
 
 use crate::cmd::{Cmd, OutputData};
 use crate::config::{ConfigFile, CryptoCfg, Fallback, Policy, Usb};
-use crate::dracut::{self, ModuleContext, ModulePaths};
 use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
@@ -56,7 +55,9 @@ pub(crate) fn detect_initramfs_flavor() -> Result<InitramfsFlavor> {
     let dracut_paths = ["/usr/bin/dracut", "/usr/sbin/dracut"];
     let dracut_available = dracut_paths.iter().any(|p| Path::new(p).exists());
     if dracut_available {
-        return Ok(InitramfsFlavor::Dracut(dracut::preferred_module_dir()));
+        return Ok(InitramfsFlavor::Dracut(
+            crate::dracut::preferred_module_dir(),
+        ));
     }
 
     if Path::new("/usr/sbin/update-initramfs").exists() {
@@ -179,6 +180,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         .parent()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/run/beskar".to_string());
+    let key_location_uri = format!("file://{}", key_path.display());
 
     let existing_key = read_existing_key(&key_path)?;
 
@@ -281,7 +283,14 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
     begin_phase(ui, "Keysmithing // Beskar Pattern", opts.confirm_each_phase)?;
     let key_material = generate_key_material()?;
-    apply_key_to_encryption_root(&zfs, &enc_root, &key_material, existing_key.as_ref(), ui)?;
+    apply_key_to_encryption_root(
+        &zfs,
+        &enc_root,
+        &key_material,
+        existing_key.as_ref(),
+        &key_location_uri,
+        ui,
+    )?;
     write_key_to_usb(
         &usb_partition,
         &key_filename,
@@ -392,7 +401,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
             Some(initramfs_flavor.clone()),
         )?,
         InitramfsFlavor::InitramfsTools => {
-            install_initramfs_tools_scripts(&enc_root, &config_path, &binary_path, ui)?
+            install_initramfs_tools_scripts(Path::new(&key_mount_dir), ui)?
         }
     }
     timing.pace(Pace::Info);
@@ -966,6 +975,7 @@ fn apply_key_to_encryption_root(
     enc_root: &str,
     key_material: &KeyMaterial,
     existing_key: Option<&ExistingKey>,
+    key_location: &str,
     ui: &UX,
 ) -> Result<()> {
     ui.info(&format!(
@@ -1001,11 +1011,17 @@ fn apply_key_to_encryption_root(
                     enc_root, key_material.sha256, descendants
                 ),
             );
+            zfs.set_property(enc_root, "keylocation", key_location)
+                .with_context(|| format!("set keylocation to {} on {}", key_location, enc_root))?;
             Ok(())
         }
         Err(err) => {
             let err_msg = err.to_string();
             if err_msg.contains("Key already loaded") {
+                zfs.set_property(enc_root, "keylocation", key_location)
+                    .with_context(|| {
+                        format!("set keylocation to {} on {}", key_location, enc_root)
+                    })?;
                 ui.note("ZFS reports the key was already resident; verification deferred to the self-test.");
                 audit_log(
                     "INIT_ZFS_REKEY_WARN",
@@ -1510,70 +1526,31 @@ fn device_has_mounts(node: &str) -> Result<bool> {
     Ok(false)
 }
 
-pub(crate) fn install_dracut_module(
-    module_dir: &Path,
-    dataset: &str,
-    config_path: &Path,
-    binary_path: &Path,
-    ui: &UX,
-) -> Result<()> {
-    if !binary_path.exists() {
-        return Err(anyhow!(
-            "zfs_beskar_key binary not found at {}",
-            binary_path.display()
-        ));
-    }
-
-    let module_paths = ModulePaths::new(module_dir);
-    let ctx = ModuleContext {
-        dataset,
-        config_path,
-        binary_path,
-    };
-
-    dracut::install_module(&module_paths, &ctx)?;
-
-    ui.success(&format!(
-        "Dracut module reforged at {}.",
-        module_dir.display()
-    ));
-    audit_log(
-        "INIT_DRACUT_MODULE",
-        &format!("dataset={} module={}", dataset, module_dir.display()),
-    );
-    Ok(())
-}
-
-pub(crate) fn install_initramfs_tools_scripts(
-    dataset: &str,
-    config_path: &Path,
-    binary_path: &Path,
-    ui: &UX,
-) -> Result<()> {
-    if !binary_path.exists() {
-        return Err(anyhow!(
-            "zfs_beskar_key binary not found at {}",
-            binary_path.display()
-        ));
-    }
-
+pub(crate) fn install_initramfs_tools_scripts(key_mount_path: &Path, ui: &UX) -> Result<()> {
     let hook_path = Path::new(INITRAMFS_HOOK_PATH);
     if let Some(parent) = hook_path.parent() {
         fs::create_dir_all(parent).context("create initramfs-tools hook directory")?;
     }
 
-    let hook_content = format!(
-        r#"#!/bin/sh
+    let hook_content = r#"#!/bin/sh
 set -e
 
 . /usr/share/initramfs-tools/hook-functions
 
-copy_exec "{binary}" "{binary}"
-copy_file "{config}" "{config}"
-"#,
-        binary = binary_path.display(),
-        config = config_path.display()
-    );
+if command -v zfs >/dev/null 2>&1; then
+    copy_exec "$(command -v zfs)"
+fi
+if command -v blkid >/dev/null 2>&1; then
+    copy_exec "$(command -v blkid)"
+fi
+if command -v mount >/dev/null 2>&1; then
+    copy_exec "$(command -v mount)"
+fi
+if command -v umount >/dev/null 2>&1; then
+    copy_exec "$(command -v umount)"
+fi
+"#
+    .to_string();
 
     let mut hook_file =
         File::create(hook_path).with_context(|| format!("create {}", hook_path.display()))?;
@@ -1586,6 +1563,10 @@ copy_file "{config}" "{config}"
     if let Some(parent) = local_top_path.parent() {
         fs::create_dir_all(parent).context("create initramfs-tools local-top directory")?;
     }
+
+    let mountpoint = key_mount_path
+        .to_str()
+        .ok_or_else(|| anyhow!("invalid key mount path for initramfs-tools"))?;
 
     let local_top_content = format!(
         r#"#!/bin/sh
@@ -1605,10 +1586,8 @@ case "$1" in
 esac
 
 TOKEN_LABEL="{label}"
-MOUNTPOINT="/run/beskar"
-CONFIG_PATH="{config}"
-DATASET="{dataset}"
-BINARY="{binary}"
+MOUNTPOINT="{mountpoint}"
+mounted=false
 
 mkdir -p "$MOUNTPOINT"
 DEVICE="$(blkid -L "$TOKEN_LABEL" 2>/dev/null || true)"
@@ -1622,20 +1601,20 @@ if ! mount -o ro "$DEVICE" "$MOUNTPOINT"; then
     exit 0
 fi
 
-if [ -x "$BINARY" ]; then
-    if ! "$BINARY" auto-unlock --config="$CONFIG_PATH" --dataset="$DATASET" --strict-usb --json; then
-        echo "beskar: auto-unlock invocation failed" >&2
+mounted=true
+cleanup() {{
+    if $mounted; then
+        umount "$MOUNTPOINT" 2>/dev/null || true
     fi
-else
-    echo "beskar: binary $BINARY unavailable in initramfs" >&2
-fi
+}}
+trap cleanup EXIT
 
-umount "$MOUNTPOINT" 2>/dev/null || true
+if ! zfs load-key -a; then
+    echo "beskar: zfs load-key -a failed; fallback to native prompts." >&2
+fi
 "#,
         label = BESKAR_LABEL,
-        config = config_path.display(),
-        dataset = dataset,
-        binary = binary_path.display()
+        mountpoint = mountpoint
     );
 
     let mut local_top_file = File::create(local_top_path)
@@ -1645,13 +1624,10 @@ umount "$MOUNTPOINT" 2>/dev/null || true
     fs::set_permissions(local_top_path, Permissions::from_mode(0o755))
         .context("set initramfs local-top permissions")?;
 
-    ui.success("Initramfs-tools scripts installed for beskar auto-unlock.");
+    ui.success("Initramfs-tools scripts installed for beskar auto-unlock (Ubuntu style).");
     audit_log(
         "INIT_INITRAMFS_TOOLS",
-        &format!(
-            "dataset={} hook={} script={}",
-            dataset, INITRAMFS_HOOK_PATH, INITRAMFS_LOCAL_TOP_PATH
-        ),
+        "Ubuntu initramfs-tools hook installed.",
     );
     Ok(())
 }
