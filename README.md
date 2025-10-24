@@ -93,7 +93,7 @@ sudo /usr/local/bin/zfs_beskar_key self-test --dataset=rpool/ROOT
 
 ```bash
 sudo /usr/local/bin/zfs_beskar_key install-units --config=/etc/zfs-beskar.toml
-systemctl status run-beskar.mount
+systemctl status beskar-load-key.service
 systemctl status beskar-unlock.service
 ```
 

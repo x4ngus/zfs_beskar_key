@@ -10,6 +10,8 @@ install() {
     inst_multiple blkid mount umount mkdir mountpoint zfs
     inst_simple "$moddir/{{SCRIPT_NAME}}" "/sbin/{{SCRIPT_NAME}}"
     inst_simple "$moddir/{{SERVICE_NAME}}" "$systemdsystemunitdir/{{SERVICE_NAME}}"
+    mkdir -p "$systemdsystemunitdir/zfs-load-key.service.d"
+    inst_simple "$moddir/{{DROPIN_DIR}}/{{DROPIN_NAME}}" "$systemdsystemunitdir/zfs-load-key.service.d/{{DROPIN_NAME}}"
     mkdir -p "$systemdsystemunitdir/initrd-root-fs.target.wants"
     ln -sf "../{{SERVICE_NAME}}" "$systemdsystemunitdir/initrd-root-fs.target.wants/{{SERVICE_NAME}}"
 }

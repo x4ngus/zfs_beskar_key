@@ -1593,7 +1593,7 @@ MAX_WAIT=30
 SLEEP_INTERVAL=1
 
 wait_for_device() {{
-    elapsed=0
+    local elapsed=0
     while [ "$elapsed" -lt "$MAX_WAIT" ]; do
         if blkid -L "$TOKEN_LABEL" >/dev/null 2>&1; then
             return 0
@@ -1605,7 +1605,7 @@ wait_for_device() {{
 }}
 
 wait_for_key() {{
-    elapsed=0
+    local elapsed=0
     while [ "$elapsed" -lt "$MAX_WAIT" ]; do
         if [ -f "$KEY_PATH" ]; then
             return 0
