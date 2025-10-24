@@ -11,9 +11,10 @@ fn main() {
             "MODULE_SETUP_TEMPLATE",
             "src/dracut/templates/module-setup.sh",
         ),
+        ("SCRIPT_TEMPLATE", "src/dracut/templates/beskar-load-key.sh"),
         (
-            "MOUNT_UNIT_TEMPLATE",
-            "src/dracut/templates/run-beskar.mount",
+            "SERVICE_TEMPLATE",
+            "src/dracut/templates/beskar-load-key.service",
         ),
     ];
 

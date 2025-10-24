@@ -2,21 +2,23 @@
 
 ---
 
-## v1.7.1 — Persistent Forge
+## v1.7.2 — Persistent Forge
 **Date:** 2025-10-23  
 **Codename:** *Mount Sentinel*
 
 ### Highlights
 
-- **Persistent initramfs mount**  
-  - Beskar now drops a native systemd `.mount` unit (and matching initramfs-tools hook) that keeps `/run/beskar` mounted before `zfs-load-key` fires, resolving the "key hasn’t appeared" race on Ubuntu 25.10.
+- **Beskar loader service**  
+  - A dedicated dracut service (`beskar-load-key.service`) now waits for the token, mounts it at `/run/beskar`, and feeds `zfs load-key -a` before `zfs-load-key` runs—eliminating the "key hasn’t appeared" race in Ubuntu 25.10.
+- **Synchronized initramfs-tools hook**  
+  - The local-top script mirrors the service logic with the same wait loops, so both initramfs stacks keep the key mounted until the real root is ready.
 - **Hands-free rebuilds**  
-  - `zfs_beskar_key init` and the bootstrapper always rebuild the initramfs after stamping the module, leaving no manual `install-dracut`/`dracut -f` steps.
+  - `zfs_beskar_key init`, the dracut installer, and the bootstrapper automatically rebuild the initramfs after stamping the loader, leaving no manual `install-dracut`/`dracut -f` steps.
 
 ### Fixes & Maintenance
 
-- Doctor leverages the shared installer, regenerating the mount unit and initramfs scripts when they drift while ensuring `keylocation` stays aligned with the runtime mount path.
-- Initramfs-tools local-top script mirrors the dracut behaviour without unmounting, guaranteeing the key file persists until the real root is available.
+- Doctor now validates the loader script/service, rewrites them when they drift, and re-runs the shared installer to keep `keylocation` and the initramfs artifacts in sync.
+- Beskar copies every required helper (`blkid`, `mount`, `mountpoint`, `zfs`) into the image so the loader works even on trimmed initramfs builds.
 
 ## v1.7.0 — Ubuntu Lockstep
 **Date:** 2025-10-23  

@@ -581,11 +581,11 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     match &initramfs_flavor {
         Some(InitramfsFlavor::Dracut(module_dir)) => {
             let mountpoint_owned = key_runtime_dir.to_string_lossy().into_owned();
-            let unit_name = dracut::derive_mount_unit_name(&mountpoint_owned);
-            let module_paths = ModulePaths::new(module_dir, &unit_name);
+            let key_path_owned = key_path.to_string_lossy().into_owned();
+            let module_paths = ModulePaths::new(module_dir);
             let ctx = ModuleContext {
                 mountpoint: &mountpoint_owned,
-                unit_name,
+                key_path: &key_path_owned,
             };
 
             let module_exists = module_paths.root.exists();
@@ -675,7 +675,7 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
                     "initramfs-tools scripts present".to_string(),
                 );
             } else {
-                match install_initramfs_tools_scripts(key_runtime_dir.as_path(), ui) {
+                match install_initramfs_tools_scripts(key_runtime_dir.as_path(), key_path, ui) {
                     Ok(_) => {
                         need_initramfs_refresh = true;
                         log_entry(

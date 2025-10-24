@@ -400,7 +400,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
             Some(initramfs_flavor.clone()),
         )?,
         InitramfsFlavor::InitramfsTools => {
-            install_initramfs_tools_scripts(Path::new(&key_mount_dir), ui)?
+            install_initramfs_tools_scripts(Path::new(&key_mount_dir), &key_path, ui)?
         }
     }
     timing.pace(Pace::Info);
@@ -1516,7 +1516,11 @@ fn device_has_mounts(node: &str) -> Result<bool> {
     Ok(false)
 }
 
-pub(crate) fn install_initramfs_tools_scripts(key_mount_path: &Path, ui: &UX) -> Result<()> {
+pub(crate) fn install_initramfs_tools_scripts(
+    key_mount_path: &Path,
+    key_path: &Path,
+    ui: &UX,
+) -> Result<()> {
     let hook_path = Path::new(INITRAMFS_HOOK_PATH);
     if let Some(parent) = hook_path.parent() {
         fs::create_dir_all(parent).context("create initramfs-tools hook directory")?;
@@ -1539,6 +1543,9 @@ fi
 if command -v umount >/dev/null 2>&1; then
     copy_exec "$(command -v umount)"
 fi
+if command -v mountpoint >/dev/null 2>&1; then
+    copy_exec "$(command -v mountpoint)"
+fi
 "#
     .to_string();
 
@@ -1557,6 +1564,10 @@ fi
     let mountpoint = key_mount_path
         .to_str()
         .ok_or_else(|| anyhow!("invalid key mount path for initramfs-tools"))?;
+
+    let key_path_str = key_path
+        .to_str()
+        .ok_or_else(|| anyhow!("invalid key path for initramfs-tools"))?;
 
     let local_top_content = format!(
         r#"#!/bin/sh
@@ -1577,6 +1588,39 @@ esac
 
 TOKEN_LABEL="{label}"
 MOUNTPOINT="{mountpoint}"
+KEY_PATH="{key_path}"
+MAX_WAIT=30
+SLEEP_INTERVAL=1
+
+wait_for_device() {{
+    elapsed=0
+    while [ "$elapsed" -lt "$MAX_WAIT" ]; do
+        if blkid -L "$TOKEN_LABEL" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep "$SLEEP_INTERVAL"
+        elapsed=$((elapsed + SLEEP_INTERVAL))
+    done
+    return 1
+}}
+
+wait_for_key() {{
+    elapsed=0
+    while [ "$elapsed" -lt "$MAX_WAIT" ]; do
+        if [ -f "$KEY_PATH" ]; then
+            return 0
+        fi
+        sleep "$SLEEP_INTERVAL"
+        elapsed=$((elapsed + SLEEP_INTERVAL))
+    done
+    return 1
+}}
+
+if ! wait_for_device; then
+    echo "beskar: token $TOKEN_LABEL not detected within ${{MAX_WAIT}}s; deferring to native prompts." >&2
+    exit 0
+fi
+
 mkdir -p "$MOUNTPOINT"
 DEVICE="$(blkid -L "$TOKEN_LABEL" 2>/dev/null || true)"
 if [ -z "$DEVICE" ]; then
@@ -1591,12 +1635,15 @@ elif ! mount -o ro "$DEVICE" "$MOUNTPOINT"; then
     exit 0
 fi
 
-if ! zfs load-key -a; then
+if ! wait_for_key; then
+    echo "beskar: key file $KEY_PATH not detected within ${{MAX_WAIT}}s; relying on native prompts." >&2
+elif ! zfs load-key -a; then
     echo "beskar: zfs load-key -a failed; fallback to native prompts." >&2
 fi
 "#,
         label = BESKAR_LABEL,
-        mountpoint = mountpoint
+        mountpoint = mountpoint,
+        key_path = key_path_str
     );
 
     let mut local_top_file = File::create(local_top_path)
