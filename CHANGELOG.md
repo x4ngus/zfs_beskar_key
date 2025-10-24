@@ -17,6 +17,7 @@
 
 - Doctor messaging now mirrors the new workflow, telling operators to replay `install-dracut` and `dracut -f` when manual intervention is still required.
 - Initramfs-tools scripts declare `PREREQ="zfs"` so they queue behind the upstream ZFS copy stage, matching Ubuntu 25.10 expectations.
+- Initramfs unlock now feeds ZFS the expected 64-character hex key (rather than binary bytes), resolving the `Raw key too short (expected 32)` boot failure on Ubuntu 25.10.
 
 ## v1.6.2 — Forge Cascade
 **Date:** 2025-10-22  

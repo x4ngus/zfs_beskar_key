@@ -17,6 +17,7 @@ A USB-first ZFS unlock companion forged for dependable, unattended boots. Tribut
 - Dracut assets now ship from `src/dracut/templates`, guaranteeing consistent module generation.
 - `zfs_beskar_key init` automatically runs the same installer path as `install-dracut` and immediately calls `dracut -f`, so new keys are baked into initramfs without extra operator steps.
 - Doctor repairs surface actionable guidance (`install-dracut` ▸ `dracut -f`) whenever the module needs a refresh.
+- Initramfs unlock now feeds ZFS the expected 64-character hex key material, fixing the `Raw key too short (expected 32)` issue observed on Ubuntu 25.10.
 
 ---
 

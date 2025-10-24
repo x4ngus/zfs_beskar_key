@@ -321,7 +321,10 @@ fn load_usb_key_material(ui: &UX, cfg: &ConfigFile) -> Result<Zeroizing<Vec<u8>>
         audit_log("UNLOCK_CHECKSUM_SKIP", "Checksum skipped; field not set");
     }
 
-    Ok(raw_bytes)
+    let mut ascii_hex = cleaned.into_bytes();
+    ascii_hex.push(b'\n');
+
+    Ok(Zeroizing::new(ascii_hex))
 }
 
 fn prompt_fallback_passphrase(
