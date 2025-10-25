@@ -4,13 +4,14 @@
 
 <img width="860" height="430" alt="image" src="https://github.com/user-attachments/assets/309192cc-9f2b-42ac-b36a-918083e472ef" />
 
-A USB-first ZFS unlock companion forged for dependable, unattended boots. Tribute ▸ Temper ▸ Drill ▸ Diagnose ▸ Deploy.
+A USB-first ZFS unlock companion forged for dependable, unattended boots. 
+Tribute ▸ Temper ▸ Drill ▸ Diagnose ▸ Deploy.
 
 ---
 
 ## Overview
 
-`zfs_beskar_key` unlocks encrypted ZFS datasets from a dedicated USB key while keeping a secured passphrase fallback online. Configuration lives in `/etc/zfs-beskar.toml`; commands default to strict permissions and atomic writes.
+`zfs_beskar_key` unlocks encrypted ZFS datasets from a dedicated USB key.
 
 ### Release highlights (v1.8.0)
 
@@ -47,14 +48,19 @@ git clone https://github.com/x4ngus/zfs_beskar_key.git
 cd zfs_beskar_key
 cargo build --release
 sudo cp target/release/zfs_beskar_key /usr/local/bin/
-sudo sudo zfs_beskar_key
+sudo zfs_beskar_key
 ```
 
 ---
 
 ## Configuration
 
-1. **Prepare USB manually** (skip if the bootstrap script already handled it):
+1. **Recommended guided mode**:
+   ```bash
+   sudo /usr/local/bin/zfs_beskar_key --menu
+   ```
+   The menu surfaces every command with prompts for first-time operators.
+1. **Optional prepare USB manually** (skip if the bootstrap script already handled it):
    ```bash
    sudo parted /dev/sdb -- mklabel gpt
    sudo parted /dev/sdb -- mkpart BESKARKEY ext4 1MiB 100%
@@ -70,19 +76,14 @@ sudo sudo zfs_beskar_key
    sudo /usr/local/bin/zfs_beskar_key init --dataset=rpool/ROOT
    ```
    `init` records the dataset list, USB path, SHA-256 fingerprint, and binary location, backing up any existing config. It also prints a Base32 recovery key—store it offline so you can rebuild the USB later.
-3. **Optional guided mode**:
-   ```bash
-   sudo /usr/local/bin/zfs_beskar_key --menu
-   ```
-   The menu surfaces every command with prompts for first-time operators.
 
 ---
 
 ## Validation
 
 ```bash
-sudo /usr/local/bin/zfs_beskar_key doctor --dataset=rpool/ROOT
-sudo /usr/local/bin/zfs_beskar_key self-test --dataset=rpool/ROOT
+sudo /usr/local/bin/zfs_beskar_key doctor 
+sudo /usr/local/bin/zfs_beskar_key self-test 
 ```
 
 `doctor` verifies USB presence, key integrity, config permissions, dracut modules, and systemd units. `self-test` simulates the boot unlock sequence end-to-end.
@@ -95,12 +96,6 @@ sudo /usr/local/bin/zfs_beskar_key self-test --dataset=rpool/ROOT
 sudo /usr/local/bin/zfs_beskar_key install-units --config=/etc/zfs-beskar.toml
 systemctl status beskar-load-key.service
 systemctl status beskar-unlock.service
-```
-
-Confirm the unlock path without rebooting:
-
-```bash
-sudo /usr/local/bin/zfs_beskar_key auto-unlock --dataset=rpool/ROOT --config=/etc/zfs-beskar.toml
 ```
 
 ---
@@ -130,7 +125,7 @@ sudo /usr/local/bin/zfs_beskar_key auto-unlock --dataset=rpool/ROOT --config=/et
 
 ## Project Details
 
-- **Current release:** v1.7.2
+- **Current release:** v1.8.0
 - **License:** MIT (see `LICENSE`)
 - **Author:** Angus J.
 
