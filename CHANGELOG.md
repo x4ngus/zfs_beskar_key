@@ -2,6 +2,25 @@
 
 ---
 
+## v1.7.3 — Fail-Closed Loader
+**Date:** 2025-10-24  
+**Codename:** *Checksum Ward*
+
+### Highlights
+
+- **Initramfs loader now fails closed**  
+  - `beskar-load-key.sh` logs every stage (token detection, mount attempts, `zfs load-key -a`) and exits non-zero when any step flakes, so `systemd` surfaces the real cause instead of falling through to dracut’s generic “key hasn’t appeared” warning.
+- **On-boot checksum enforcement**  
+  - The loader receives `usb.expected_sha256` and refuses to hand ZFS a stale or tampered key, giving you a clear journal entry and forcing an operator decision instead of silently unlocking with the wrong material.
+- **Mount reliability in early boot**  
+  - The dracut module now copies `udevadm`, `sha256sum`, and the ext4/vfat kernel modules into the image and retries mounts with back-off, keeping `/run/beskar` reachable even on lean initramfs builds.
+
+### Fixes & Maintenance
+
+- `install-dracut` and `doctor` warn when `config.usb.expected_sha256` is missing so operators know checksum enforcement is disabled before stamping initramfs.
+- `beskar-load-key.sh` calls `udevadm settle`, bounds mount retries, and differentiates between device, key, checksum, and `zfs load-key` failures to make journalctl triage straightforward.
+- `module-setup.sh` now instals the checksum and block-device helpers plus kernel modules so every dependency the loader needs ships with the Beskar dracut module.
+
 ## v1.7.2 — Persistent Forge
 **Date:** 2025-10-23  
 **Codename:** *Mount Sentinel*

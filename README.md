@@ -12,12 +12,11 @@ A USB-first ZFS unlock companion forged for dependable, unattended boots. Tribut
 
 `zfs_beskar_key` unlocks encrypted ZFS datasets from a dedicated USB key while keeping a secured passphrase fallback online. Configuration lives in `/etc/zfs-beskar.toml`; commands default to strict permissions and atomic writes.
 
-### Release highlights (v1.7.2)
+### Release highlights (v1.7.3)
 
-- Dracut assets now ship from `src/dracut/templates`, guaranteeing consistent module generation.
-- Forge runs automatically stamp the Beskar module, set `keylocation=file:///run/beskar/<key>`, and force `dracut -f`, so the initramfs always carries the refreshed key without extra operator steps.
-- The initramfs now calls a dedicated Beskar loader service/hook that waits for the USB, mounts it, and feeds `zfs load-key -a`—eliminating the "key hasn't appeared" race in Ubuntu 25.10 tests.
-- Doctor enforces the same contract—repairing `keylocation`, templating the loader service/hook, and rebuilding the initramfs scripts when they drift.
+- The Beskar loader now fails closed with explicit journal errors when the token never appears, the mount flakes, or `zfs load-key -a` returns non-zero—no more silent success followed by dracut warnings.
+- initramfs enforces the recorded `usb.expected_sha256`, refusing to feed ZFS when the on-disk key doesn’t match and telling you exactly why it bailed out.
+- The dracut module now carries `udevadm`, `sha256sum`, and the ext4/vfat kernel modules so mounting `/run/beskar` in early boot is reliable even on trimmed images, and doctor warns when the checksum guard is missing.
 
 ---
 

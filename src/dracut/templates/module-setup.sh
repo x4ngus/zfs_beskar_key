@@ -7,7 +7,8 @@ depends() {
 }
 
 install() {
-    inst_multiple blkid mount umount mkdir mountpoint zfs
+    inst_multiple blkid mount umount mkdir mountpoint zfs sha256sum udevadm
+    instmods ext4 vfat nls_utf8
     inst_simple "$moddir/{{SCRIPT_NAME}}" "/sbin/{{SCRIPT_NAME}}"
     inst_simple "$moddir/{{SERVICE_NAME}}" "$systemdsystemunitdir/{{SERVICE_NAME}}"
     mkdir -p "$systemdsystemunitdir/zfs-load-key.service.d"

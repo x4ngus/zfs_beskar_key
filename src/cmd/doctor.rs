@@ -582,10 +582,23 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
         Some(InitramfsFlavor::Dracut(module_dir)) => {
             let mountpoint_owned = key_runtime_dir.to_string_lossy().into_owned();
             let key_path_owned = key_path.to_string_lossy().into_owned();
+            let key_sha = cfg.usb.expected_sha256.as_deref();
+            if key_sha.is_none() {
+                log_entry(
+                    &mut report,
+                    ui,
+                    timing,
+                    "USB checksum",
+                    Status::Warn,
+                    "config.usb.expected_sha256 missing — initramfs loader cannot verify the token."
+                        .to_string(),
+                );
+            }
             let module_paths = ModulePaths::new(module_dir);
             let ctx = ModuleContext {
                 mountpoint: &mountpoint_owned,
                 key_path: &key_path_owned,
+                key_sha256: key_sha,
             };
 
             let module_exists = module_paths.root.exists();

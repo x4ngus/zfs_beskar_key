@@ -106,11 +106,17 @@ pub fn install_for_dataset(
         ))
         }
     };
-
+    let key_sha = cfg.usb.expected_sha256.as_deref();
+    if key_sha.is_none() {
+        ui.warn(
+            "config.usb.expected_sha256 missing — initramfs loader will skip checksum enforcement.",
+        );
+    }
     let module_paths = ModulePaths::new(&module_dir);
     let ctx = ModuleContext {
         mountpoint: &mountpoint_owned,
         key_path: &key_path_owned,
+        key_sha256: key_sha,
     };
 
     dracut::install_module(&module_paths, &ctx)?;

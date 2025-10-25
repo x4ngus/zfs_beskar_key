@@ -22,6 +22,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) struct ModuleContext<'a> {
     pub mountpoint: &'a str,
     pub key_path: &'a str,
+    pub key_sha256: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +163,12 @@ fn replacements(ctx: &ModuleContext<'_>) -> Vec<(&'static str, String)> {
         ("DROPIN_DIR", DROPIN_DIR.to_string()),
         ("DROPIN_NAME", DROPIN_NAME.to_string()),
         ("KEY_PATH", ctx.key_path.to_string()),
+        (
+            "KEY_SHA256",
+            ctx.key_sha256
+                .map(|s| s.to_string())
+                .unwrap_or_else(String::new),
+        ),
     ]
 }
 
