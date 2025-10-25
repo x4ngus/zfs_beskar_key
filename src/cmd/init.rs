@@ -1677,7 +1677,7 @@ pub(crate) fn rebuild_initramfs(ui: &UX, flavor: &InitramfsFlavor) -> Result<()>
                 dracut_path
             ));
             let cmd = Cmd::new_allowlisted(*dracut_path, Duration::from_secs(180))?;
-            let out = cmd.run(&["-f"], None)?;
+            let out = cmd.run(&["-f", "--add", "zfs-beskar"], None)?;
             if out.status != 0 {
                 return Err(anyhow!(
                     "dracut exited with status {}: {}",

@@ -18,6 +18,7 @@ A USB-first ZFS unlock companion forged for dependable, unattended boots. Tribut
 - initramfs enforces the recorded `usb.expected_sha256`, refusing to feed ZFS when the on-disk key doesn’t match and telling you exactly why it bailed out.
 - The dracut module now carries `udevadm`, `sha256sum`, and the ext4/vfat kernel modules so mounting `/run/beskar` in early boot is reliable even on trimmed images, and doctor warns when the checksum guard is missing.
 - `zfs-load-module.service` now `Requires=` the Beskar loader, so the USB wait/verify logic always runs before ZFS touches disks; if the token workflow fails, you see the error before the import stack proceeds.
+- `dracut -f` invocations now force-add `zfs-beskar`, guaranteeing the module (and its services) actually land inside the refreshed initramfs image.
 
 ---
 

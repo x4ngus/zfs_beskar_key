@@ -21,6 +21,7 @@
 - `beskar-load-key.sh` calls `udevadm settle`, bounds mount retries, and differentiates between device, key, checksum, and `zfs load-key` failures to make journalctl triage straightforward.
 - `module-setup.sh` now instals the checksum and block-device helpers plus kernel modules so every dependency the loader needs ships with the Beskar dracut module.
 - `zfs-load-module.service` now `Requires=` the Beskar loader and inherits its console logging, so the initramfs will not proceed (and you’ll see the cause on-screen) until the USB workflow either succeeds or hard-fails.
+- All `dracut -f` calls now pass `--add zfs-beskar`, guaranteeing the module ships in each rebuilt image instead of relying on dracut’s hostonly heuristics.
 
 ## v1.7.2 — Persistent Forge
 **Date:** 2025-10-23  
