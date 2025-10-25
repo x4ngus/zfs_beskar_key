@@ -1,6 +1,6 @@
 [package]
 name = "zfs_beskar_key"
-version = "1.7.4"
+version = "1.8.0"
 edition = "2021"
 authors = ["x4ngus"]
 description = "ZFS Beskar Key: USB-first ZFS key management for the modern-day Bounty Hunter."
@@ -24,6 +24,7 @@ nanoid = "0.4"
 chrono = "0.4"
 console = "0.15"
 tempfile = "3"
+data-encoding = "2"
 
 [profile.release]
 opt-level = "z"

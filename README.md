@@ -12,11 +12,12 @@ A USB-first ZFS unlock companion forged for dependable, unattended boots. Tribut
 
 `zfs_beskar_key` unlocks encrypted ZFS datasets from a dedicated USB key while keeping a secured passphrase fallback online. Configuration lives in `/etc/zfs-beskar.toml`; commands default to strict permissions and atomic writes.
 
-### Release highlights (v1.7.4)
+### Release highlights (v1.8.0)
 
-- The Beskar loader is always baked into initramfs via `dracut -f --add zfs-beskar`, and both `zfs-load-module`/`zfs-load-key` now `Require=` it, so USB mounting + key verification happen before any ZFS import work begins.
-- USB key files are now stored as 32 raw bytes (legacy hex files are auto-converted during `doctor`/`install-dracut` runs), matching Ubuntu 25.10’s dracut expectations and eliminating the “Raw key too long (expected 32)” boot failure.
-- The bootstrapper verifies the refreshed initramfs actually contains `beskar-load-key` and its systemd drop-ins (via `lsinitrd`) and warns you immediately if anything is missing.
+- **USB recovery forge** – A new `zfs_beskar_key recover` command (and menu item) rebuilds a Beskar token on any compatible Linux host using only the recorded Base32 recovery key. The command wipes the selected USB, recreates the filesystem, and writes the original raw key without touching the local system.
+- **Base32 recovery keys** – `init` now encodes the 32-byte raw key directly (instead of generating a separate alphanumeric code), guaranteeing perfect reconstruction while remaining copy/paste friendly.
+- **Narrative polish** – All UI/menu/bootstrap text now follows the concise bounty-hunter cadence: Armorer statements remain ceremonial but runtime logs are short, direct, and battle-ready. Every core command still ends with “This is the Way.”
+- **Raw-key enforcement everywhere** – Legacy hex flows were removed from unlock, doctor, simulation, and bootstrap. Any lingering hex files are converted automatically, and the initramfs loader refuses to proceed unless the key file is exactly 32 bytes.
 
 ---
 
@@ -68,7 +69,7 @@ sudo sudo zfs_beskar_key
    ```bash
    sudo /usr/local/bin/zfs_beskar_key init --dataset=rpool/ROOT
    ```
-   `init` records the dataset list, USB path, SHA-256 fingerprint, and binary location, backing up any existing config.
+   `init` records the dataset list, USB path, SHA-256 fingerprint, and binary location, backing up any existing config. It also prints a Base32 recovery key—store it offline so you can rebuild the USB later.
 3. **Optional guided mode**:
    ```bash
    sudo /usr/local/bin/zfs_beskar_key --menu
@@ -123,6 +124,7 @@ sudo /usr/local/bin/zfs_beskar_key auto-unlock --dataset=rpool/ROOT --config=/et
 - Missing USB media triggers a secure `systemd-ask-password` prompt at boot; enter the dataset passphrase to proceed.
 - After recovery login, run `doctor` to restore checksums, units, or dracut modules.
 - Use `auto-unlock --json` for scripted rescue workflows.
+- Lost your Beskar token? On any Linux host with this tool installed, run `sudo zfs_beskar_key recover --dataset=<encryption_root>`, select the target USB, and enter the recorded Base32 recovery key. The command wipes the token, recreates the filesystem, and rewrites the original raw key without touching the local system.
 
 ---
 

@@ -14,8 +14,8 @@ use crate::dracut::{self, ModuleContext, ModulePaths, DEFAULT_MOUNTPOINT};
 use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
-use crate::util::keyfile::{ensure_raw_key_file, KeyEncoding};
 use crate::util::binary::determine_binary_path;
+use crate::util::keyfile::{ensure_raw_key_file, KeyEncoding};
 use crate::zfs::Zfs;
 use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
@@ -61,7 +61,7 @@ enum UnitVerification {
 
 pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     ui.banner();
-    ui.phase("Armorer's Diagnostics // Clan Systems Report");
+    ui.phase("Diagnostics Report");
 
     let mut report: Vec<ReportEntry> = Vec::new();
     let mut need_initramfs_refresh = false;
@@ -498,10 +498,7 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
                                 timing,
                                 "USB checksum",
                                 Status::Warn,
-                                format!(
-                                    "Checksum mismatch ({}). Re-run init --force.",
-                                    err
-                                ),
+                                format!("Checksum mismatch ({}). Re-run init --force.", err),
                             );
                         } else {
                             need_initramfs_refresh = true;
@@ -983,7 +980,7 @@ fn summarize(report: &[ReportEntry], ui: &UX, timing: &Timing) -> Result<()> {
     }
 
     ui.data_panel(
-        "Diagnostic Summary",
+        "Arena Report",
         &[
             ("Pass", passes.to_string()),
             ("Fixed", fixed.to_string()),
@@ -1006,7 +1003,7 @@ fn summarize(report: &[ReportEntry], ui: &UX, timing: &Timing) -> Result<()> {
     if fails > 0 {
         Err(anyhow!("Diagnostics uncovered blocking issues"))
     } else {
-        ui.success("Diagnostics complete. The armour's story is recorded. This is the Way.");
+        ui.success("Diagnostics steady. This is the Way.");
         Ok(())
     }
 }

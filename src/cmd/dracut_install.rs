@@ -79,9 +79,8 @@ pub fn install_for_dataset(
             key_path.display()
         ));
     }
-    let material = ensure_raw_key_file(key_path).with_context(|| {
-        format!("normalize key file at {}", key_path.display())
-    })?;
+    let material = ensure_raw_key_file(key_path)
+        .with_context(|| format!("normalize key file at {}", key_path.display()))?;
     if material.encoding == KeyEncoding::Hex {
         ui.info(&format!(
             "Converted legacy hex key at {} into raw bytes for Ubuntu's initramfs chain.",

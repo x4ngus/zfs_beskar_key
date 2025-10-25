@@ -145,10 +145,10 @@ require_cmd() {
 }
 
 forge_banner
-info "Beskar tribute bootstrap commencing — lay your beskar on the anvil."
+info "Beskar bootstrap starting. Tribute ready."
 
 if [[ -n $CONFIG_OVERRIDE && $CONFIG_OVERRIDE != "$CONFIG_PATH" ]]; then
-    warn "CONFIG_PATH override detected (${CONFIG_OVERRIDE}). The Rust forge always writes ${CONFIG_PATH}; override ignored."
+    warn "CONFIG_PATH override (${CONFIG_OVERRIDE}) ignored; forge writes ${CONFIG_PATH}."
 fi
 
 [[ $EUID -eq 0 ]] || die "Run this script as root."
@@ -161,11 +161,11 @@ for cmd in lsblk blkid parted mkfs.ext4 udevadm sha256sum zfs; do
 done
 
 printf '\n'
-info "Scanning the hangar for removable vessels…"
+info "Scanning removable vessels…"
 lsblk -rpo NAME,TYPE,RM,SIZE,MODEL |
     awk '$2 == "disk" { rm = ($3 == "1") ? "yes" : "no"; printf "  %s  %s  removable=%s  %s\n", $1, $4, rm, $5 }'
 
-printf '%b' "${ACCENT}▸${RESET} Select the carrier to temper (e.g. /dev/sdb): "
+printf '%b' "${ACCENT}▸${RESET} Select target device (e.g. /dev/sdb): "
 read -r DEVICE
 [[ -n ${DEVICE:-} && -b $DEVICE ]] || die "Invalid block device: $DEVICE"
 
@@ -182,7 +182,7 @@ DEFAULT_DATASET=$(zfs list -H -o name,mountpoint -t filesystem 2>/dev/null | awk
 if [[ -z $DEFAULT_DATASET ]]; then
     DEFAULT_DATASET="rpool/ROOT"
 else
-    info "Detected dataset $DEFAULT_DATASET mounted at /. Using it as the default forge target."
+    info "Detected dataset $DEFAULT_DATASET at /. Target set."
 fi
 
 printf '%b' "${ACCENT}▸${RESET} Dataset to unlock [$DEFAULT_DATASET]: "
@@ -198,7 +198,7 @@ if [[ ${safe_answer,,} == "y" ]]; then
 fi
 
 printf '\n'
-info "Summoning the Rust armorer (v${APP_VERSION}) for a unified forge…"
+info "Invoking zfs_beskar_key v${APP_VERSION} for the forge."
 INIT_CMD=(
     "$BINARY"
     "--config" "$CONFIG_PATH"
@@ -209,7 +209,7 @@ INIT_CMD=(
 )
 
 if ! "${INIT_CMD[@]}"; then
-    die "Rust forge failed; inspect the output above before retrying."
+    die "Forge command failed; resolve errors above."
 fi
 
 ENCRYPTION_ROOT=$(zfs get -H -o value encryptionroot "$DATASET" 2>/dev/null | awk 'NR==1 {print $1}' || true)
@@ -218,12 +218,12 @@ if [[ -z ${ENCRYPTION_ROOT:-} || ${ENCRYPTION_ROOT} == "-" ]]; then
 fi
 KEY_LOCATION=$(zfs get -H -o value keylocation "$ENCRYPTION_ROOT" 2>/dev/null | awk 'NR==1 {print $1}' || true)
 if [[ -n ${KEY_LOCATION:-} ]]; then
-    info "Encryption root $ENCRYPTION_ROOT now advertises keylocation=$KEY_LOCATION."
+    info "Encryption root $ENCRYPTION_ROOT now reports keylocation=$KEY_LOCATION."
 fi
-success "Init run stamped the Beskar dracut module and rebuilt the initramfs (Ubuntu load-key flow active)."
+success "Init run complete; dracut refreshed."
 
 printf '\n'
-info "Deploying systemd sentries for unattended unlock…"
+info "Installing systemd sentries…"
 INSTALL_CMD=(
     "$BINARY"
     "--config" "$CONFIG_PATH"
@@ -243,19 +243,19 @@ USB_UUID=$(blkid | grep "$BESKAR_LABEL" | sed -n 's/.*UUID=\"\([^\"]*\)\".*/\1/p
 if mountpoint -q "$RUN_DIR"; then
     success "Beskar token mounted at $RUN_DIR."
 else
-    warn "Beskar token not mounted at $RUN_DIR. The forge attempted to mount it; check manually."
+    warn "Token not mounted at $RUN_DIR; check manually."
 fi
 
 printf '%b\n' "${MUTED}  • USB label : $BESKAR_LABEL${RESET}"
 if [[ -n $USB_UUID ]]; then
     printf '%b\n' "${MUTED}  • USB UUID  : $USB_UUID${RESET}"
 else
-    printf '%b\n' "${WARN}[WARN]${RESET} Unable to auto-detect USB UUID — ensure /dev/disk/by-label/$BESKAR_LABEL exists."
+    printf '%b\n' "${WARN}[WARN]${RESET} USB UUID missing; ensure /dev/disk/by-label/$BESKAR_LABEL exists."
 fi
 if [[ -n $KEY_PATH ]]; then
     printf '%b\n' "${MUTED}  • Key file  : $KEY_PATH${RESET}"
 else
-    printf '%b\n' "${WARN}[WARN]${RESET} key_hex_path missing from $CONFIG_PATH — inspect the config."
+    printf '%b\n' "${WARN}[WARN]${RESET} key_hex_path missing from $CONFIG_PATH — inspect config."
 fi
 printf '%b\n' "${MUTED}  • Config    : $CONFIG_PATH${RESET}"
 if [[ -n $USB_SHA ]]; then

@@ -2,6 +2,26 @@
 
 ---
 
+## v1.8.0 — Recovery Forge
+**Date:** 2025-10-24  
+**Codename:** *Tribute Recall*
+
+### Highlights
+
+- **Cross-host USB recovery**  
+  - `zfs_beskar_key recover` (and the new menu item) wipes a selected USB, rebuilds the filesystem, and writes the original raw key using only the Base32 recovery code printed during `init`. The workflow runs entirely offline so any Linux machine with the tool installed can rebuild a Beskar token.
+- **Base32 recovery codes**  
+  - `init` now encodes the actual 32-byte key with RFC 4648 Base32 (no padding) and displays the grouped string for offline storage. No more random passphrases—what you store is exactly what the loader expects.
+- **Raw-key enforcement & holistic polish**  
+  - Legacy hex flows were purged from unlock, doctor, simulation, and bootstrap. Any leftover hex files are auto-converted, the initramfs loader refuses keys that aren’t 32 bytes, and the vault drill now spins a raw-key ephemeral pool mirroring boot-time behavior.
+- **Concise bounty-hunter UX**  
+  - All user-facing text (CLI, bootstrap, menus) now uses sub-10-word Armorer callouts. The hunter receives crisp directives while the Armorer delivers ceremony in brief. Every core routine still signs off with “This is the Way.”
+
+### Fixes & Maintenance
+
+- Shared helper functions (`write_key_to_usb`, `report_usb_target`, etc.) were exported so the recover command can reuse the hardened forge routines.
+- Documentation now references the Base32 recovery key and provides guidance for the new recover flow.
+
 ## v1.7.4 — Pre-Boot Integrity
 **Date:** 2025-10-24  
 **Codename:** *Hex Vigil*
@@ -11,8 +31,10 @@
 - **Loader forced into initramfs chain**  
   - Dracut rebuilds now pass `--add zfs-beskar`, and both `zfs-load-module.service` and `zfs-load-key.service` `Require=` the Beskar loader, guaranteeing the USB wait/mount gate runs before ZFS touches disks.
 - **True raw-key checksum enforcement**  
-  - USB key files are now stored as 32 raw bytes (legacy hex files are auto-converted during `install-dracut`/`doctor` runs), so Ubuntu 25.10’s dracut hook receives the format it expects and no longer throws `Raw key too long (expected 32)` during `dracut-pre-mount`.
+  - USB key files are now stored as 32 raw bytes (legacy hex files are auto-converted during `install-dracut`/`doctor` runs), so Ubuntu 25.10’s dracut hook receives the format it expects and no longer throws `Raw key too long (expected 32)` during `dracut-pre-mount`.  
   - `beskar-load-key.sh` validates file size, hashes the binary contents, and aborts early if the token drifts, matching the fingerprint captured during `init`.
+- **Recovery forge command**  
+  - Recovery keys now encode the raw USB key via Base32 and the new `zfs_beskar_key recover` command can rebuild a Beskar token (partition + key file) on any compatible Linux system using only the recorded recovery code.
 - **Bootstrap verification**  
   - `scripts/bootstrap.sh` now inspects `/boot/initrd.img-$(uname -r)` with `lsinitrd` and reports any missing Beskar artifacts immediately so operators can re-run `install-dracut` before rebooting.
 
@@ -460,3 +482,21 @@ The project now supports full USB-first auto-unlock for ZFS datasets with a self
 
 ### Maintainer
 Angus J. — [@x4ngus](https://github.com/x4ngus)
+# ZFS_BESKAR_KEY Changelog
+
+---
+
+## v1.8.0 — Recovery Forge
+**Date:** 2025-10-24  
+**Codename:** *Tribute Recall*
+
+### Highlights
+
+- **Cross-host USB recovery**  
+  - `zfs_beskar_key recover` (and the new menu item) wipes a selected USB, rebuilds the filesystem, and writes the original raw key using only the Base32 recovery code printed during `init`. The workflow runs entirely offline, so any Linux machine with the tool installed can rebuild a Beskar token for disaster recovery.
+- **Base32 recovery codes**  
+  - `init` now encodes the actual 32-byte key with RFC 4648 Base32 (no padding) and displays the grouped string for offline storage. No more random passphrases—what you store is exactly what the loader expects.
+- **Raw-key enforcement & holistic polish**  
+  - Legacy hex flows were purged from unlock, doctor, simulation, and bootstrap. Any leftover hex files are auto-converted, the initramfs loader refuses keys that aren’t 32 bytes, and the vault drill now spins a raw-key ephemeral pool that mirrors boot-time behavior.
+- **Concise bounty-hunter UX**  
+  - All user-facing text (CLI, bootstrap, menus) now uses sub-10-word Armorer callouts. The hunter receives crisp directives while the Armorer delivers ceremony in brief. Every core routine still signs off with “This is the Way.”

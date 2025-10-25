@@ -75,10 +75,7 @@ enum Commands {
         safe: bool,
     },
     ForgeKey,
-    Unlock {
-        #[arg(long)]
-        key_hex: Option<String>,
-    },
+    Unlock,
     Lock,
     AutoUnlock {
         /// USB-only mode for initramfs: disable passphrase fallback.
@@ -86,6 +83,7 @@ enum Commands {
         strict_usb: bool,
     },
     Doctor,
+    Recover,
     InstallUnits,
     InstallDracut,
     SelfTest,
@@ -198,7 +196,7 @@ fn dispatch_command(
             timing.pace(Pace::Prompt);
         }
 
-        Commands::Unlock { key_hex: _ } => {
+        Commands::Unlock => {
             let dataset = resolve_dataset(&cli.dataset, cfg)?;
             cmd::unlock::run_unlock(ui, timing, cfg, &dataset, UnlockOptions::default())?;
         }
@@ -223,6 +221,12 @@ fn dispatch_command(
                 strict_usb: *strict_usb,
             };
             cmd::unlock::run_unlock(ui, timing, cfg, &dataset, opts)?;
+        }
+
+        Commands::Recover => {
+            let dataset = resolve_dataset(&cli.dataset, cfg)?;
+            cmd::recover::run_recover(ui, timing, &dataset)?;
+            timing.pace(Pace::Prompt);
         }
 
         Commands::Doctor => {
@@ -306,6 +310,10 @@ fn dispatch_menu_choice(
         menu::MenuChoice::VaultDrill => {
             cmd::simulate::run_vault_drill(ui, timing, cfg)?;
         }
+        menu::MenuChoice::Recover => {
+            let dataset = resolve_dataset(&cli.dataset, cfg)?;
+            cmd::recover::run_recover(ui, timing, &dataset)?;
+        }
         menu::MenuChoice::Doctor => {
             cmd::doctor::run_doctor(ui, timing)?;
         }
@@ -385,7 +393,7 @@ fn auto_unlock_with(
         Ok(state) => state,
         Err(e) => {
             ui.warn(&format!(
-                "Keystatus for {} obscured ({}). Assuming it remains locked.",
+                "Keystatus for {} unknown ({}). Assuming locked.",
                 enc_root, e
             ));
             false
@@ -393,7 +401,7 @@ fn auto_unlock_with(
     };
     if unlocked {
         ui.info(&format!(
-            "Encryption root {} already stands open. Initiating USB key self-test…",
+            "{} already unlocked; running USB self-test.",
             enc_root
         ));
     }
@@ -403,7 +411,7 @@ fn auto_unlock_with(
         .with_context(|| format!("normalize USB key file {}", usb_path.display()))?;
     if disk_material.encoding == KeyEncoding::Hex {
         ui.warn(&format!(
-            "Legacy hex key at {} converted to 32 raw bytes for Ubuntu initramfs compatibility.",
+            "Legacy hex key at {} converted to raw bytes.",
             usb_path.display()
         ));
     }
@@ -424,14 +432,11 @@ fn auto_unlock_with(
         }
         ui.info("USB key checksum verified (SHA-256 match).");
     } else {
-        ui.warn("No reference SHA-256 in config.usb.expected_sha256 — authenticity check skipped.");
+        ui.warn("No stored SHA-256; authenticity skipped.");
     }
 
     if !unlocked {
-        ui.info(&format!(
-            "Attempting to unlock {} with the verified tribute…",
-            enc_root
-        ));
+        ui.info(&format!("Unlocking {} with USB key.", enc_root));
         zfs.load_key(&enc_root, &raw_key_bytes)?;
         ui.success(&format!(
             "Key accepted from the tribute. {} now stands unlocked. This is the Way.",

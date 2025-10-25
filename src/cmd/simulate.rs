@@ -7,6 +7,7 @@ use crate::config::{ConfigFile, CryptoCfg, Fallback, Policy, Usb};
 use crate::ui::{Pace, Timing, UX};
 use crate::zfs::Zfs;
 use anyhow::{anyhow, Context, Result};
+use nanoid::nanoid;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -19,7 +20,7 @@ use tempfile::TempDir;
 
 pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Result<()> {
     ui.banner();
-    ui.phase("Ephemeral Forge // Preparing Vault Simulation");
+    ui.phase("Sim Forge Prep");
 
     let mut sim = match VaultSimulation::prepare(base_cfg) {
         Ok(sim) => sim,
@@ -35,11 +36,11 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
         sim.pool_name,
         sim.image_path.display()
     ));
-    ui.note("Sealing the training vault to mimic a cold boot state…");
+    ui.note("Sealing training vault to mimic cold boot.");
     sim.ensure_locked()?;
     timing.pace(Pace::Prompt);
 
-    ui.phase("Vault Drill // USB-First Unseal");
+    ui.phase("USB Drill");
     match crate::cmd::unlock::run_unlock(
         ui,
         timing,
@@ -50,12 +51,9 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
         Ok(_) => {
             let zfs = sim.zfs()?;
             if zfs.is_unlocked(&sim.dataset_name)? {
-                ui.success("Ephemeral vault unlocked — the beskar token proves its worth.");
-                audit_status(&zfs, &sim.dataset_name, ui);
+                ui.success("Ephemeral vault unlocked — beskar token validated.");
             } else {
-                ui.warn(
-                    "Vault status uncertain after simulation; inspect `zfs keystatus` directly.",
-                );
+                ui.warn("Vault status uncertain after drill; inspect `zfs keystatus`.");
             }
         }
         Err(err) => {
@@ -65,7 +63,7 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
     }
     timing.pace(Pace::Info);
 
-    ui.phase("Reseal Protocol // Disengaging Key");
+    ui.phase("Reseal Key");
     let zfs = sim.zfs()?;
     if let Err(err) = zfs.unload_key(&sim.dataset_name) {
         emit_reseal_remediation(ui, timing, base_cfg, &err);
@@ -74,11 +72,11 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
     ui.success("Ephemeral vault sealed; key withdrawn from memory.");
     timing.pace(Pace::Critical);
 
-    ui.phase("Forge Cleanup // Dismantling Simulation");
+    ui.phase("Forge Cleanup");
     sim.teardown()?;
     timing.pace(Pace::Info);
 
-    ui.phase("Post-Drill Briefing // Clan Readiness");
+    ui.phase("Post Drill Brief");
     ui.data_panel(
         "Recommended Steps",
         &[
@@ -99,7 +97,7 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
     ui.note(
         "If any step raises concerns, rerun the forge with --force and inspect `/etc/zfs-beskar.toml.bak-*` for recovery.",
     );
-    ui.success("Simulation complete. Your true pools remain untouched. This is the Way.");
+    ui.success("Simulation complete. This is the Way.");
     Ok(())
 }
 
@@ -132,11 +130,10 @@ impl VaultSimulation {
             .set_len(128 * 1024 * 1024)
             .context("size simulation backing file")?;
 
-        let pool_name = format!("beskar_sim_{}", nanoid::nanoid!(6).to_lowercase());
+        let pool_name = format!("beskar_sim_{}", nanoid!(6).to_lowercase());
         let dataset_name = format!("{}/forge", pool_name);
 
-        let raw_key_path = temp_dir.path().join("beskar.raw");
-        let hex_key_path = temp_dir.path().join("beskar.keyhex");
+        let raw_key_path = temp_dir.path().join("beskar.key");
         let mut key_bytes = [0u8; 32];
         OsRng.fill_bytes(&mut key_bytes);
 
@@ -148,15 +145,6 @@ impl VaultSimulation {
             fs::set_permissions(&raw_key_path, fs::Permissions::from_mode(0o400))
                 .context("set raw key permissions")?;
         }
-        {
-            let mut hex = File::create(&hex_key_path).context("create hex key file")?;
-            let hex_str = hex::encode(key_bytes);
-            writeln!(hex, "{}", hex_str).context("write hex key")?;
-            hex.sync_all().ok();
-            fs::set_permissions(&hex_key_path, fs::Permissions::from_mode(0o400))
-                .context("set hex key permissions")?;
-        }
-
         let sha256 = hex::encode(Sha256::digest(key_bytes));
 
         let zpool_cmd = Cmd::new_allowlisted(&zpool_path, Duration::from_secs(10))?;
@@ -218,7 +206,7 @@ impl VaultSimulation {
                 timeout_secs: base_cfg.crypto.timeout_secs.max(1),
             },
             usb: Usb {
-                key_hex_path: hex_key_path.to_string_lossy().into_owned(),
+                key_hex_path: raw_key_path.to_string_lossy().into_owned(),
                 expected_sha256: Some(sha256.clone()),
             },
             fallback: Fallback::default(),
@@ -282,184 +270,60 @@ impl VaultSimulation {
     }
 
     fn destroy_dataset(&self) -> Result<OutputData> {
-        let cmd = Cmd::new_allowlisted(&self.zfs_path, Duration::from_secs(10))?;
-        cmd.run(&["destroy", "-R", &self.dataset_name], None)
+        let cmd = Cmd::new_allowlisted(&self.zfs_path, self.timeout)?;
+        cmd.run(&["destroy", "-f", &self.dataset_name], None)
+            .context("destroy simulated dataset")
     }
 
     fn destroy_pool(&self) -> Result<OutputData> {
-        let cmd = Cmd::new_allowlisted(&self.zpool_path, Duration::from_secs(10))?;
+        let cmd = Cmd::new_allowlisted(&self.zpool_path, self.timeout)?;
         cmd.run(&["destroy", "-f", &self.pool_name], None)
+            .context("destroy simulated pool")
     }
 }
 
-impl Drop for VaultSimulation {
-    fn drop(&mut self) {
-        if !self.cleaned {
-            let _ = self.destroy_dataset();
-            let _ = self.destroy_pool();
-            self.cleaned = true;
-        }
-    }
+fn emit_preflight_remediation(ui: &UX, timing: &Timing, cfg: &ConfigFile, err: &anyhow::Error) {
+    ui.error(&format!(
+        "Simulation prep failed: {}. Confirm zfs/zpool binaries and free space.",
+        err
+    ));
+    ui.note(&format!(
+        "Config path: {}. Dataset list: {:?}.",
+        cfg.path.display(),
+        cfg.policy.datasets
+    ));
+    timing.pace(Pace::Error);
+}
+
+fn emit_unlock_remediation(ui: &UX, timing: &Timing, cfg: &ConfigFile, err: &anyhow::Error) {
+    ui.error(&format!("Vault drill unlock failed: {}", err));
+    ui.note("Review `journalctl -b` and rerun `zfs_beskar_key doctor`.");
+    ui.note(&format!(
+        "Using simulated config {}; USB path {}.",
+        cfg.path.display(),
+        cfg.usb.key_hex_path
+    ));
+    timing.pace(Pace::Error);
+}
+
+fn emit_reseal_remediation(ui: &UX, timing: &Timing, _cfg: &ConfigFile, err: &anyhow::Error) {
+    ui.error(&format!("Unable to reseal simulated dataset: {}", err));
+    ui.note("Run `zfs unload-key <dataset>` manually before retrying.");
+    timing.pace(Pace::Error);
 }
 
 fn resolve_zfs_path(cfg: &ConfigFile) -> Result<String> {
-    if let Some(p) = &cfg.policy.zfs_path {
-        return Ok(p.clone());
-    }
-
-    let candidates = [
-        "/sbin/zfs",
-        "/usr/sbin/zfs",
-        "/usr/local/sbin/zfs",
-        "/bin/zfs",
-    ];
-    for candidate in &candidates {
-        if Path::new(candidate).exists() {
-            return Ok(candidate.to_string());
-        }
-    }
-    Err(anyhow!("zfs binary not found. Checked: {:?}", candidates))
+    cfg.policy
+        .zfs_path
+        .clone()
+        .ok_or_else(|| anyhow!("cfg.policy.zfs_path missing"))
 }
 
 fn resolve_zpool_path() -> Result<String> {
-    let candidates = [
-        "/sbin/zpool",
-        "/usr/sbin/zpool",
-        "/usr/local/sbin/zpool",
-        "/bin/zpool",
-    ];
-    for candidate in &candidates {
+    for candidate in ["/sbin/zpool", "/usr/sbin/zpool", "/usr/bin/zpool"] {
         if Path::new(candidate).exists() {
             return Ok(candidate.to_string());
         }
     }
-    Err(anyhow!("zpool binary not found. Checked: {:?}", candidates))
-}
-
-fn emit_preflight_remediation(
-    ui: &UX,
-    timing: &Timing,
-    base_cfg: &ConfigFile,
-    err: &anyhow::Error,
-) {
-    let message = err.to_string();
-    ui.error(&format!("Vault drill aborted before liftoff: {}", message));
-    timing.pace(Pace::Error);
-
-    let dataset_hint = base_cfg
-        .policy
-        .datasets
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "<dataset>".to_string());
-
-    let mut checklist: Vec<(&str, String)> = vec![
-        ("Run as root", "sudo zfs_beskar_key --menu".to_string()),
-        (
-            "Install ZFS utilities",
-            "sudo apt install zfsutils-linux".to_string(),
-        ),
-        ("Load kernel modules", "sudo modprobe zfs".to_string()),
-    ];
-
-    if message.contains("binary not found") {
-        checklist.push((
-            "Verify zfs/zpool path",
-            "which zfs && which zpool".to_string(),
-        ));
-    }
-    if message.contains("permission denied") {
-        checklist.push((
-            "Confirm device access",
-            "lsmod | grep zfs  # ensure modules are loaded".to_string(),
-        ));
-    }
-    checklist.push((
-        "Practice manual drill",
-        format!("sudo zfs load-key {}", dataset_hint),
-    ));
-
-    ui.data_panel("Preflight Checklist", &checklist);
-    ui.note("Work through these items, then relaunch the vault drill to verify the forge.");
-}
-
-fn audit_status(zfs: &Zfs, dataset: &str, ui: &UX) {
-    if let Ok(enc_root) = zfs.encryption_root(dataset) {
-        ui.note(&format!("Encryption root confirmed as {}.", enc_root));
-    }
-    match zfs.is_unlocked(dataset) {
-        Ok(true) => ui.note("Keystatus: available (key is resident)."),
-        Ok(false) => ui.note("Keystatus: locked (key removed)."),
-        Err(err) => ui.warn(&format!("Unable to query keystatus ({}).", err)),
-    }
-}
-
-fn emit_unlock_remediation(ui: &UX, timing: &Timing, base_cfg: &ConfigFile, err: &anyhow::Error) {
-    let dataset_hint = base_cfg
-        .policy
-        .datasets
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "<dataset>".to_string());
-    let cfg_hint = base_cfg.path.as_path().to_string_lossy().to_string();
-
-    ui.error(&format!("Ephemeral unlock attempt failed: {}", err));
-    timing.pace(Pace::Error);
-    ui.data_panel(
-        "Unlock Remediation Checklist",
-        &[
-            (
-                "Inspect keystatus",
-                format!("sudo zfs list -o name,keystatus | grep {}", dataset_hint),
-            ),
-            (
-                "Manual load-key",
-                format!("sudo zfs load-key {}", dataset_hint),
-            ),
-            (
-                "Re-forge config",
-                format!(
-                    "sudo zfs_beskar_key init --dataset={} --force",
-                    dataset_hint
-                ),
-            ),
-            (
-                "Refresh initramfs",
-                "sudo dracut -f  # ensure Beskar module in recovery image".to_string(),
-            ),
-            ("Review config", format!("sudo editor {}", cfg_hint)),
-        ],
-    );
-    ui.note("When each item reports green, rerun the vault drill to confirm the forge is stable.");
-}
-
-fn emit_reseal_remediation(ui: &UX, timing: &Timing, base_cfg: &ConfigFile, err: &anyhow::Error) {
-    let dataset_hint = base_cfg
-        .policy
-        .datasets
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "<dataset>".to_string());
-
-    ui.error(&format!(
-        "Reseal attempt on the ephemeral vault failed: {}",
-        err
-    ));
-    timing.pace(Pace::Error);
-    ui.data_panel(
-        "Reseal Troubleshooting",
-        &[
-            ("Check active mounts", "sudo zfs mount".to_string()),
-            (
-                "Manual unload-key",
-                format!("sudo zfs unload-key {}", dataset_hint),
-            ),
-            (
-                "Identify busy consumers",
-                format!("sudo fuser -vm {}", dataset_hint),
-            ),
-            ("Ensure dracut rebuild", "sudo dracut -f".to_string()),
-        ],
-    );
-    ui.note("If the dataset stays busy, silence dependent services, unload again, and rerun the forge drill.");
+    Err(anyhow!("zpool binary not found on standard paths"))
 }

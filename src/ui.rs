@@ -333,11 +333,11 @@ impl UX {
 
         self.log_line(
             LogLevel::Note,
-            "Discipline cadence: Tribute ▸ Temper ▸ Drill ▸ Diagnose ▸ Deploy.",
+            "Cadence: Temper ▸ Drill ▸ Diagnose ▸ Deploy.",
         );
         self.log_line(
             LogLevel::Note,
-            "Armorer: Tribute received. Declare the defense you seek and we shall shape it.",
+            "Armorer: Tribute received. State your need.",
         );
     }
 

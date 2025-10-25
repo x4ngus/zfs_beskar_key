@@ -5,9 +5,8 @@
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use rand::distributions::Alphanumeric;
+use rand::rngs::OsRng;
 use rand::RngCore;
-use rand::{rngs::OsRng, thread_rng, Rng};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, Metadata, Permissions};
 use std::io::Write;
@@ -24,6 +23,7 @@ use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
 use crate::util::binary::determine_binary_path;
 use crate::util::keyfile::read_key_material;
+use crate::util::recovery::encode_recovery_code;
 use crate::zfs::Zfs;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::collections::HashMap;
@@ -90,14 +90,8 @@ pub struct InitOptions {
 
 pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     ui.banner();
-    begin_phase(
-        ui,
-        "Armorer's Preparation // Tempering Beskar",
-        opts.confirm_each_phase,
-    )?;
-    ui.info(
-        "You lay your beskar tribute before me; I will temper it into a ward for your dataset. Speak each detail as I call for it.",
-    );
+    begin_phase(ui, "Armorer Temper", opts.confirm_each_phase)?;
+    ui.info("Token docked. State objective.");
     timing.pace(Pace::Info);
 
     let binary_path = determine_binary_path(None)?;
@@ -108,7 +102,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         Ok(ds) => ds,
         Err(err) => {
             ui.warn(&format!(
-                "Unable to auto-detect dataset mounted at / ({}). Defaulting to rpool/ROOT.",
+                "Root scan failed ({}). Defaulting to rpool/ROOT.",
                 err
             ));
             None
@@ -118,10 +112,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     let target_dataset = if let Some(dataset) = opts.pool.clone() {
         dataset
     } else if let Some(auto) = detected_root.clone() {
-        ui.info(&format!(
-            "Detected dataset {} mounted at /. Using it as the forge target.",
-            auto
-        ));
+        ui.info(&format!("Detected {} at /. Target locked.", auto));
         auto
     } else {
         "rpool/ROOT".to_string()
@@ -132,7 +123,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         Ok(_) => target_dataset.clone(),
         Err(err) => {
             ui.warn(&format!(
-                "Unable to identify encryption root for {} ({}). Falling back to the specified dataset.",
+                "Encryption root unknown for {} ({}). Using dataset.",
                 target_dataset, err
             ));
             target_dataset.clone()
@@ -140,10 +131,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     };
 
     if enc_root != target_dataset {
-        ui.info(&format!(
-            "Dataset {} draws its ward from encryption root {}.",
-            target_dataset, enc_root
-        ));
+        ui.info(&format!("{} inherits {}.", target_dataset, enc_root));
     }
 
     if !zfs
@@ -195,7 +183,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     dismantle_mounts(&usb_partition, ui)?;
 
     ui.data_panel(
-        "Armorer's Ledger",
+        "Forge Ledger",
         &[
             ("Dataset", target_dataset.clone()),
             ("Encryption Root", enc_root.clone()),
@@ -208,11 +196,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     );
     timing.pace(Pace::Info);
 
-    begin_phase(
-        ui,
-        "Material Survey // Inspect Alloy",
-        opts.confirm_each_phase,
-    )?;
+    begin_phase(ui, "Survey Alloy", opts.confirm_each_phase)?;
     report_usb_target(ui, &usb_disk);
     if usb_partition != usb_disk {
         report_usb_target(ui, &usb_partition);
@@ -222,10 +206,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     let mut effective_force = opts.force;
 
     if effective_force {
-        ui.warn(&format!(
-            "Override accepted. I will scour {} clean so the tribute accepts a new inscription.",
-            usb_disk
-        ));
+        ui.warn(&format!("Override accepted. Wiping {} clean.", usb_disk));
         wipe_usb_token(&usb_disk, &usb_partition, ui)?;
         settle_udev(ui)?;
         audit_log(
@@ -241,13 +222,9 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
                         return Err(err);
                     }
 
-                    ui.note("Safe mode: this ingot bears the wrong crest. Direct the next strike.");
+                    ui.note("Safe mode: crest mismatch. Choose strike.");
                     let theme = ColorfulTheme::default();
-                    let actions = vec![
-                        "Cleanse it now (wipe & relabel)",
-                        "Rescan its sigils",
-                        "Stand down",
-                    ];
+                    let actions = vec!["Cleanse ingot", "Rescan sigils", "Stand down"];
                     let choice = Select::with_theme(&theme)
                         .with_prompt("Safe mode: how shall we correct this ingot?")
                         .items(&actions)
@@ -257,22 +234,19 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
                     match choice {
                         0 => {
-                            ui.warn(&format!(
-                                "As commanded — cleansing {} and carving the proper crest.",
-                                usb_disk
-                            ));
+                            ui.warn(&format!("Cleansing {} now.", usb_disk));
                             wipe_usb_token(&usb_disk, &usb_partition, ui)?;
                             settle_udev(ui)?;
                             effective_force = true;
                             continue;
                         }
                         1 => {
-                            ui.note("Let the signals settle. I will verify the crest once more.");
+                            ui.note("Settling bus; rechecking crest.");
                             settle_udev(ui)?;
                             continue;
                         }
                         _ => {
-                            ui.warn("Safe mode terminated. The forge rests until you return.");
+                            ui.warn("Safe mode ended. Forge idle.");
                             return Err(anyhow!("initialization aborted by operator"));
                         }
                     }
@@ -281,7 +255,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         }
     }
 
-    begin_phase(ui, "Keysmithing // Beskar Pattern", opts.confirm_each_phase)?;
+    begin_phase(ui, "Forge Key", opts.confirm_each_phase)?;
     let key_material = generate_key_material()?;
     apply_key_to_encryption_root(
         &zfs,
@@ -310,22 +284,17 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     timing.pace(Pace::Info);
 
     let fingerprint_short = group_string(&key_material.sha256[..32], 8, ' ');
-    ui.security(&format!(
-        "Key signet etched — SHA-256 (first 128 bits): {}",
-        fingerprint_short
-    ));
+    ui.security(&format!("Key hash: {}", fingerprint_short));
     audit_log(
         "INIT_KEY",
         &format!("partition={} sha256={}", usb_partition, key_material.sha256),
     );
 
-    begin_phase(ui, "Configuration Engraving", opts.confirm_each_phase)?;
+    begin_phase(ui, "Config Etch", opts.confirm_each_phase)?;
     let config_path = PathBuf::from(DEFAULT_CONFIG_PATH);
 
     let (config, force_write) = if config_path.exists() {
-        ui.note(
-            "A prior creed is etched into this plate. I will bring its lines in step with today's forging.",
-        );
+        ui.note("Existing config detected; syncing values.");
 
         let backup_path = backup_existing_config(&config_path)?;
         ui.note(&format!(
@@ -347,7 +316,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
             }
             Err(err) => {
                 ui.warn(&format!(
-                    "Existing creed unreadable ({}). I will hammer out a fresh Mandalorian template.",
+                    "Previous config unreadable ({}). Writing fresh template.",
                     err
                 ));
                 default_config(
@@ -378,21 +347,14 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     atomic_write_toml(&config_path, &config, force_write)?;
     fs::set_permissions(&config_path, Permissions::from_mode(0o600))
         .context("failed to set config permissions")?;
-    ui.success(&format!(
-        "Config etched into plate at {}.",
-        config_path.display()
-    ));
+    ui.success(&format!("Config written to {}.", config_path.display()));
     audit_log("INIT_CFG", &format!("Created {}", config_path.display()));
     timing.pace(Pace::Info);
 
     let initramfs_flavor =
         detect_initramfs_flavor().context("detect initramfs tooling for auto-unlock")?;
 
-    begin_phase(
-        ui,
-        "Armor Fittings // Initramfs Integration",
-        opts.confirm_each_phase,
-    )?;
+    begin_phase(ui, "Initramfs Fittings", opts.confirm_each_phase)?;
     match &initramfs_flavor {
         InitramfsFlavor::Dracut(_) => crate::cmd::dracut_install::install_for_dataset(
             ui,
@@ -406,24 +368,17 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     }
     timing.pace(Pace::Info);
 
-    begin_phase(ui, "Clan Contingency", opts.confirm_each_phase)?;
-    let recovery = generate_recovery_key();
-    let recovery_formatted = group_string(&recovery.to_uppercase(), 4, '-');
-    ui.security(&format!(
-        "Recovery signet (share only with the clan elders): {}",
-        recovery_formatted
-    ));
+    begin_phase(ui, "Contingency", opts.confirm_each_phase)?;
+    let recovery_code = encode_recovery_code(&key_material.raw);
+    let recovery_formatted = group_string(&recovery_code, 4, '-');
+    ui.security(&format!("Recovery key: {}. Guard it.", recovery_formatted));
     audit_log("INIT_RECOVERY", "Generated recovery key");
     timing.pace(Pace::Info);
 
-    begin_phase(
-        ui,
-        "Clan Briefing // Initramfs Advisory",
-        opts.confirm_each_phase,
-    )?;
-    ui.info("Refreshing the forge molds immediately.");
+    begin_phase(ui, "Initramfs Briefing", opts.confirm_each_phase)?;
+    ui.info("Rebuilding initramfs now.");
     match rebuild_initramfs(ui, &initramfs_flavor) {
-        Ok(_) => ui.success("Initramfs reforged with the beskar module embedded."),
+        Ok(_) => ui.success("Initramfs rebuilt with Beskar module."),
         Err(e) => {
             ui.warn(&format!("Automatic initramfs rebuild failed ({}).", e));
             ui.note(
@@ -434,11 +389,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
     let usb_uuid = detect_partition_uuid(&usb_partition).unwrap_or_else(|_| "unknown".to_string());
 
-    begin_phase(
-        ui,
-        "Forge Summary // Armour Inventory",
-        opts.confirm_each_phase,
-    )?;
+    begin_phase(ui, "Forge Summary", opts.confirm_each_phase)?;
     ui.data_panel(
         "Artifacts",
         &[
@@ -450,8 +401,9 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         ],
     );
 
-    ui.success("The beskar plating is secured. Defensive routines now await deployment.");
-    ui.note("Marching orders: run `zfs_beskar_key doctor` to confirm the initramfs health, then drill as desired. This is the Way.");
+    ui.success("Beskar plating secured. Systems primed.");
+    ui.note("Run `zfs_beskar_key doctor` then drill.");
+    ui.success("This is the Way.");
     audit_log(
         "INIT_COMPLETE",
         &format!(
@@ -474,7 +426,7 @@ fn begin_phase(ui: &UX, label: &str, confirm: bool) -> Result<()> {
             .interact()
             .context("safe mode confirmation failed")?;
         if !proceed {
-            ui.warn("Safe mode abort acknowledged — forge sequence halted at your command.");
+            ui.warn("Safe mode abort; forge halted.");
             return Err(anyhow!("initialization aborted by operator"));
         }
     }
@@ -487,15 +439,7 @@ fn begin_phase(ui: &UX, label: &str, confirm: bool) -> Result<()> {
 // ----------------------------------------------------------------------------
 
 /// Generate a random 24-character recovery key (A-Z, a-z, 0-9)
-fn generate_recovery_key() -> String {
-    thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(24)
-        .map(char::from)
-        .collect()
-}
-
-fn sanitize_key_name(dataset: &str) -> String {
+pub(crate) fn sanitize_key_name(dataset: &str) -> String {
     dataset
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
@@ -597,28 +541,22 @@ fn backup_existing_config(path: &Path) -> Result<PathBuf> {
     Ok(backup_path)
 }
 
-fn report_usb_target(ui: &UX, device: &str) {
+pub(crate) fn report_usb_target(ui: &UX, device: &str) {
     match fs::metadata(device) {
         Ok(meta) => {
             let descriptor = describe_target(&meta);
-            ui.info(&format!(
-                "My sensors read {} as a {} candidate.",
-                device, descriptor
-            ));
+            ui.info(&format!("Scanner sees {} ({})", device, descriptor));
             audit_log(
                 "INIT_USB_SCAN",
                 &format!("device={} kind={}", device, descriptor),
             );
             if descriptor != "block device" {
-                ui.warn("I prefer a raw block device (e.g., /dev/sdb) for true beskar.");
+                ui.warn("Use raw block devices (e.g., /dev/sdb).");
             }
         }
         Err(err) => {
-            ui.warn(&format!(
-                "My instruments cannot reach {} ({}).",
-                device, err
-            ));
-            ui.note("Proceeding blind — confirm the path before we strike the hammer again.");
+            ui.warn(&format!("Cannot read {} ({}).", device, err));
+            ui.note("Proceeding blind; confirm the path.");
             audit_log(
                 "INIT_USB_SCAN_FAIL",
                 &format!("device={} err={}", device, err),
@@ -644,7 +582,7 @@ fn describe_target(meta: &Metadata) -> &'static str {
     }
 }
 
-fn group_string(input: &str, chunk: usize, separator: char) -> String {
+pub(crate) fn group_string(input: &str, chunk: usize, separator: char) -> String {
     if chunk == 0 {
         return input.to_string();
     }
@@ -665,7 +603,7 @@ fn flag_label(enabled: bool) -> String {
     }
 }
 
-fn derive_device_layout(device: &str) -> Result<(String, String)> {
+pub(crate) fn derive_device_layout(device: &str) -> Result<(String, String)> {
     let device = device.to_string();
     let path = Path::new(&device);
     if !path.exists() {
@@ -762,7 +700,7 @@ fn ensure_beskar_partition(partition: &str, ui: &UX) -> Result<()> {
     Ok(())
 }
 
-fn wipe_usb_token(disk: &str, partition: &str, ui: &UX) -> Result<()> {
+pub(crate) fn wipe_usb_token(disk: &str, partition: &str, ui: &UX) -> Result<()> {
     dismantle_mounts(disk, ui)?;
     dismantle_mounts(partition, ui)?;
 
@@ -792,7 +730,7 @@ fn wipe_usb_token(disk: &str, partition: &str, ui: &UX) -> Result<()> {
     Ok(())
 }
 
-fn settle_udev(ui: &UX) -> Result<()> {
+pub(crate) fn settle_udev(ui: &UX) -> Result<()> {
     let res = run_external(UDEVADM_BINARIES, &["settle"], Duration::from_secs(10));
     if let Err(err) = res {
         ui.warn(&format!(
@@ -832,7 +770,7 @@ fn generate_key_material() -> Result<KeyMaterial> {
     Ok(KeyMaterial { raw, sha256 })
 }
 
-fn write_key_to_usb(
+pub(crate) fn write_key_to_usb(
     partition: &str,
     key_filename: &str,
     force: bool,
@@ -848,7 +786,7 @@ fn write_key_to_usb(
             fs::remove_file(&key_path).context("remove existing key file")?;
         } else {
             ui.warn(&format!(
-                "Found a prior alloy {} — reforging it in place.",
+                "Existing key {} found; regenerating.",
                 key_filename
             ));
             fs::remove_file(&key_path).ok();
@@ -952,10 +890,7 @@ fn apply_key_to_encryption_root(
     key_location: &str,
     ui: &UX,
 ) -> Result<()> {
-    ui.info(&format!(
-        "Re-keying encryption root {} with freshly forged beskar.",
-        enc_root
-    ));
+    ui.info(&format!("Forging new key for {}.", enc_root));
 
     change_key_with_bytes(zfs, enc_root, &key_material.raw[..])
         .with_context(|| format!("change-key invocation for {}", enc_root))?;
@@ -1013,7 +948,7 @@ fn apply_key_to_encryption_root(
                 enc_root, err_msg
             ));
             if let Some(previous) = existing_key {
-                ui.warn("Attempting to restore the prior key material to maintain access.");
+                ui.warn("Trying previous key to regain access.");
                 if let Err(revert_err) = change_key_with_bytes(zfs, enc_root, &previous.raw[..]) {
                     ui.error(&format!(
                         "Unable to revert encryption root {} ({}). Manual recovery required.",
@@ -1209,7 +1144,7 @@ fn detect_partition_uuid(partition: &str) -> Result<String> {
     Ok(out.stdout.trim().to_string())
 }
 
-fn select_usb_device(ui: &UX, confirm_each_phase: bool) -> Result<String> {
+pub(crate) fn select_usb_device(ui: &UX, confirm_each_phase: bool) -> Result<String> {
     begin_phase(
         ui,
         "Target Selection // Choose Beskar Ingot",
@@ -1409,7 +1344,7 @@ fn parse_lsblk_pairs(line: &str) -> HashMap<String, String> {
     map
 }
 
-fn dismantle_mounts(node: &str, ui: &UX) -> Result<()> {
+pub(crate) fn dismantle_mounts(node: &str, ui: &UX) -> Result<()> {
     let out = run_external(
         LSBLK_BINARIES,
         &["-P", "-nrpo", "NAME,MOUNTPOINT", node],

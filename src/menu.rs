@@ -12,6 +12,7 @@ pub enum MenuChoice {
     Init,
     InitSafe,
     VaultDrill,
+    Recover,
     Doctor,
     Quit,
 }
@@ -35,28 +36,33 @@ pub fn show_main_menu(ui: &UX, timing: &Timing) -> Option<MenuChoice> {
     let entries = [
         (
             MenuChoice::Init,
-            "TEMPER THE TRIBUTE  —  Reforge the offered beskar key from first principles",
-            "The crucible ignites. Present the device and dataset without hesitation.",
+            "TEMPER BESKAR — Forge USB + config",
+            "Armorer: Full-speed forge engagement.",
         ),
         (
             MenuChoice::InitSafe,
-            "TEMPER THE TRIBUTE (GUIDED)  —  Pause before each irreversible strike",
-            "We proceed in measured beats; confirm each action as I name it.",
+            "TEMPER BESKAR (SAFE) — Confirm each strike",
+            "Armorer: Awaiting nods between strikes.",
         ),
         (
             MenuChoice::VaultDrill,
-            "VAULT DRILL  —  Rehearse the unlock path within a holoforge simulation",
-            "Your clan trains safely here; follow the sequence and observe the results.",
+            "VAULT DRILL — Rehearse holoforge unlock",
+            "Armorer: Observe, then report.",
+        ),
+        (
+            MenuChoice::Recover,
+            "RECOVER TOKEN — Rebuild USB via recovery key",
+            "Armorer: Tribute restored for battle.",
         ),
         (
             MenuChoice::Doctor,
-            "ARMORER'S AUDIT  —  Inspect defenses and prescribe repairs",
-            "I will walk the perimeter and call out any plates that ring hollow.",
+            "ARMORER AUDIT — Inspect plating for faults",
+            "Armorer: I call out weak seams.",
         ),
         (
             MenuChoice::Quit,
-            "BANK THE COALS  —  Withdraw from the forge console",
-            "The embers hold. Return when a new tribute is ready.",
+            "BANK COALS — Exit the forge console",
+            "Armorer: Embers await your return.",
         ),
     ];
     let motif = ["╳", "╂", "╋", "╂"];
@@ -109,7 +115,7 @@ pub fn show_main_menu(ui: &UX, timing: &Timing) -> Option<MenuChoice> {
             Style::new()
                 .color256(221)
                 .bold()
-                .apply_to("Directive [1-5 or Q to withdraw]: ")
+                .apply_to("Directive [1-6 or Q to withdraw]: ")
         );
         let _ = io::stdout().flush();
 
