@@ -13,6 +13,8 @@ Tribute ▸ Temper ▸ Drill ▸ Diagnose ▸ Deploy.
 
 `zfs_beskar_key` unlocks encrypted ZFS datasets from a dedicated USB key.
 
+> **Alpha build** – v1.8.0 is experimental. Validate in disposable labs, keep known-good backups, and never rely on this release without a tested recovery plan.
+
 - **USB recovery forge** – A new `zfs_beskar_key recover` command (and menu item) rebuilds a Beskar token on any compatible Linux host using only the recorded Base32 recovery key. The command wipes the selected USB, recreates the filesystem, and writes the original raw key without touching the local system.
 - **Base32 + passphrase fallback** – `init` now encodes the 32-byte raw key directly and optionally seals it with an Armorer-approved fallback passphrase (PBKDF2-protected). The same passphrase can be exercised via `self-test --fallback` to prove disaster readiness.
 - **Narrative polish** – All UI/menu/bootstrap text now follows the concise bounty-hunter cadence: Armorer statements remain ceremonial but runtime logs are short, direct, and battle-ready. Every core command still ends with “This is the Way.”
