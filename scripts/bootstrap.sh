@@ -11,7 +11,10 @@ readonly CONFIG_PATH="/etc/zfs-beskar.toml"
 readonly RUN_DIR="/run/beskar"
 readonly BINARY="${BINARY:-/usr/local/bin/zfs_beskar_key}"
 
-version_output=$("$BINARY" --version 2>/dev/null | awk 'NR==1 {print $NF}' || true)
+version_output=""
+if [[ -x $BINARY ]]; then
+    version_output=$("$BINARY" --version 2>/dev/null | awk 'NR==1 {print $NF}' || true)
+fi
 readonly APP_VERSION="${APP_VERSION:-${version_output:-unknown}}"
 readonly OPERATOR="${OPERATOR:-${USER:-$(id -un 2>/dev/null || echo "unknown")}}"
 

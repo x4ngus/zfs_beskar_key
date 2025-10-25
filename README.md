@@ -13,12 +13,14 @@ Tribute ▸ Temper ▸ Drill ▸ Diagnose ▸ Deploy.
 
 `zfs_beskar_key` unlocks encrypted ZFS datasets from a dedicated USB key.
 
-> **Alpha build** – v1.8.0 is experimental. Validate in disposable labs, keep known-good backups, and never rely on this release without a tested recovery plan.
+> **Alpha build** – v1.8.1 is experimental. Validate in disposable labs, keep known-good backups, and never rely on this release without a tested recovery plan.
 
-- **USB recovery forge** – A new `zfs_beskar_key recover` command (and menu item) rebuilds a Beskar token on any compatible Linux host using only the recorded Base32 recovery key. The command wipes the selected USB, recreates the filesystem, and writes the original raw key without touching the local system.
-- **Base32 + passphrase fallback** – `init` now encodes the 32-byte raw key directly and optionally seals it with an Armorer-approved fallback passphrase (PBKDF2-protected). The same passphrase can be exercised via `self-test --fallback` to prove disaster readiness.
-- **Narrative polish** – All UI/menu/bootstrap text now follows the concise bounty-hunter cadence: Armorer statements remain ceremonial but runtime logs are short, direct, and battle-ready. Every core command still ends with “This is the Way.”
-- **Raw-key enforcement everywhere** – Legacy hex flows were removed from unlock, doctor, simulation, and bootstrap. Any lingering hex files are converted automatically, and the initramfs loader refuses to proceed unless the key file is exactly 32 bytes.
+### Release highlights (v1.8.1)
+
+- **USB recovery forge** – `zfs_beskar_key recover` rebuilds a Beskar token on any compatible Linux host using only the recorded Base32 recovery key. The command wipes the selected USB, recreates the filesystem, and writes the original raw key without touching the local system.
+- **Passphrase fallback drill** – `init` can seal the raw key with an Armorer-approved fallback passphrase (PBKDF2-protected), and `self-test --fallback` now hides the USB to prove the passphrase path before disaster strikes.
+- **Narrative + bootstrap polish** – Bootstrap now tolerates missing binaries during version detection, and all UI/menu text follows the concise bounty-hunter cadence while still ending with “This is the Way.”
+- **Raw-key enforcement + cleanups** – Legacy hex flows were removed from unlock, doctor, simulation, and bootstrap; passphrase data is stored explicitly in the config; Clippy-driven cleanups trimmed dead code and tightened the dracut templates.
 
 ---
 

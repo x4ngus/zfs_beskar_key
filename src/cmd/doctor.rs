@@ -325,7 +325,7 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
                     timing,
                     "Keylocation",
                     Status::Pass,
-                    format!("{}", current),
+                    current,
                 ),
                 Ok(_) => match client.set_property(
                     &primary_encryption_root,
@@ -1067,7 +1067,7 @@ fn systemd_analyze(timeout: Duration) -> Result<Cmd> {
 fn find_binary(candidates: &[&str]) -> Option<String> {
     candidates
         .iter()
-        .map(|p| *p)
+        .copied()
         .find(|p| Path::new(p).exists())
         .map(|p| p.to_string())
 }

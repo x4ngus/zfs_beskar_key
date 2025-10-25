@@ -13,7 +13,6 @@ mod zfs;
 use crate::cmd::unlock::UnlockOptions;
 use crate::config::ConfigFile;
 use crate::util::binary::determine_binary_path;
-use crate::util::keyfile::ensure_raw_key_file;
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use rand::rngs::OsRng;
@@ -469,7 +468,7 @@ fn auto_unlock_with(
     }
 
     let usb_path = Path::new(&cfg.usb.key_hex_path);
-    let raw_key_bytes = ensure_raw_key_file(usb_path)
+    let raw_key_bytes = crate::util::keyfile::ensure_raw_key_file(usb_path)
         .with_context(|| format!("normalize USB key file {}", usb_path.display()))?
         .raw;
 

@@ -2,6 +2,23 @@
 
 ---
 
+## v1.8.1 — Hyperdrive Polish
+**Date:** 2025-10-24  
+**Codename:** *Hyperdrive Proof*
+
+### Highlights
+
+- **Passphrase drill & config envelope**  
+  - `init` can now seal the raw key using a PBKDF2-HMAC-SHA256 envelope (salt + XOR) and `self-test --fallback` temporarily hides the USB to confirm the Armorer passphrase works. The encrypted material lives alongside the Base32 recovery key in the config.
+- **Bootstrap resilience**  
+  - The bootstrapper no longer aborts if `zfs_beskar_key` isn’t installed yet when detecting its version, making first-run deployments smoother on fresh VMs.
+- **Clippy-driven cleanup**  
+  - Dead imports, redundant formatting, needless lifetimes, and manual loops were trimmed across `main`, `doctor`, `unlock`, `ui`, `kdf`, and `dracut` modules—reducing warnings to zero.
+- **Release metadata**  
+  - Version bumped to 1.8.1 with updated alpha disclaimer, README instructions, and MIT license for GitHub release packaging.
+
+---
+
 ## v1.8.0 — Recovery Forge
 **Date:** 2025-10-24  
 **Codename:** *Tribute Recall*

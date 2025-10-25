@@ -185,9 +185,7 @@ fn replacements(ctx: &ModuleContext<'_>) -> Vec<(&'static str, String)> {
         ("KEY_PATH", ctx.key_path.to_string()),
         (
             "KEY_SHA256",
-            ctx.key_sha256
-                .map(|s| s.to_string())
-                .unwrap_or_else(String::new),
+            ctx.key_sha256.map(|s| s.to_string()).unwrap_or_default(),
         ),
     ]
 }

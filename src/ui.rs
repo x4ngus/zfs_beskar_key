@@ -74,7 +74,7 @@ impl LogLevel {
         }
     }
 
-    fn style<'a>(self, theme: &'a Theme) -> &'a Style {
+    fn style(self, theme: &Theme) -> &Style {
         match self {
             LogLevel::Info => &theme.info,
             LogLevel::Success => &theme.ok,
@@ -190,13 +190,11 @@ impl UX {
 
     fn trim_to_width(text: &str, width: usize) -> String {
         let mut buffer = String::with_capacity(width);
-        let mut count = 0;
-        for ch in text.chars() {
+        for (count, ch) in text.chars().enumerate() {
             if count >= width {
                 break;
             }
             buffer.push(ch);
-            count += 1;
         }
         buffer
     }

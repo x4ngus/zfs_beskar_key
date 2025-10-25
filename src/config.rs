@@ -97,6 +97,22 @@ pub struct Fallback {
     /// Optional explicit path to systemd-ask-password (allowlisted)
     #[serde(default)]
     pub askpass_path: Option<String>,
+
+    /// Hex-encoded salt used for passphrase derivation
+    #[serde(default)]
+    pub passphrase_salt: Option<String>,
+
+    /// Hex-encoded XOR of derived passphrase key with raw key
+    #[serde(default)]
+    pub passphrase_xor: Option<String>,
+
+    /// PBKDF2 iteration count
+    #[serde(default = "default_passphrase_iters")]
+    pub passphrase_iters: u32,
+}
+
+fn default_passphrase_iters() -> u32 {
+    250_000
 }
 
 impl Default for Fallback {
@@ -105,6 +121,9 @@ impl Default for Fallback {
             enabled: true,
             askpass: true,
             askpass_path: Some("/usr/bin/systemd-ask-password".to_string()),
+            passphrase_salt: None,
+            passphrase_xor: None,
+            passphrase_iters: default_passphrase_iters(),
         }
     }
 }

@@ -17,15 +17,9 @@ use std::path::Path;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct UnlockOptions {
     pub strict_usb: bool,
-}
-
-impl Default for UnlockOptions {
-    fn default() -> Self {
-        Self { strict_usb: false }
-    }
 }
 
 // ----------------------------------------------------------------------------
@@ -343,10 +337,7 @@ fn prompt_fallback_passphrase(
                     let prompt = format!("Beskar fallback passphrase for {}", enc_root);
                     match cmd.run(&["--timeout=90", &prompt], None) {
                         Ok(out) if out.status == 0 => {
-                            let cleaned = out
-                                .stdout
-                                .trim_end_matches(|c| c == '\n' || c == '\r')
-                                .to_string();
+                            let cleaned = out.stdout.trim_end_matches(['\n', '\r']).to_string();
                             if !cleaned.is_empty() {
                                 ui.info("Passphrase captured via systemd-ask-password.");
                                 return Ok(Zeroizing::new(cleaned.into_bytes()));
