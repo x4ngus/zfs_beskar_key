@@ -2,6 +2,24 @@
 
 ---
 
+## v1.7.4 — Pre-Boot Integrity
+**Date:** 2025-10-24  
+**Codename:** *Hex Vigil*
+
+### Highlights
+
+- **Loader forced into initramfs chain**  
+  - Dracut rebuilds now pass `--add zfs-beskar`, and both `zfs-load-module.service` and `zfs-load-key.service` `Require=` the Beskar loader, guaranteeing the USB wait/mount gate runs before ZFS touches disks.
+- **True raw-key checksum enforcement**  
+  - `beskar-load-key.sh` strips whitespace, decodes the 64-character hex payload into raw bytes, and hashes that binary form, matching the fingerprint captured during `init` and preventing newline-induced mismatches at boot.
+- **Bootstrap verification**  
+  - `scripts/bootstrap.sh` now inspects `/boot/initrd.img-$(uname -r)` with `lsinitrd` and reports any missing Beskar artifacts immediately so operators can re-run `install-dracut` before rebooting.
+
+### Fixes & Maintenance
+
+- Dropped the hard dependency on dracut’s optional `zfs-crypto` module so the Beskar module installs cleanly on hosts that ship only the core ZFS components.
+- Added detailed initramfs verification messaging and warnings to guide operators toward `install-dracut` when artifacts drift.
+
 ## v1.7.3 — Fail-Closed Loader
 **Date:** 2025-10-24  
 **Codename:** *Checksum Ward*

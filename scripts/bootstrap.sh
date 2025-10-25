@@ -99,6 +99,38 @@ forge_banner() {
     printf '%b\n' "${ACCENT}╚${span}╝${RESET}"
 }
 
+verify_initramfs_artifacts() {
+    local dataset="$1"
+    local kernel="${2:-$(uname -r)}"
+    local image="/boot/initrd.img-${kernel}"
+
+    if ! command -v lsinitrd >/dev/null 2>&1; then
+        warn "lsinitrd not available; skipping initramfs verification (dracut module already stamped)."
+        return
+    fi
+    if [[ ! -f $image ]]; then
+        warn "Initramfs image $image not found; skipping verification."
+        return
+    fi
+
+    local manifest
+    if ! manifest=$(lsinitrd "$image" 2>/dev/null); then
+        warn "Unable to inspect $image via lsinitrd; run the command manually."
+        return
+    fi
+
+    local -a missing=()
+    grep -q 'beskar-load-key' <<<"$manifest" || missing+=("beskar-load-key.service")
+    grep -q 'zfs-load-key.service.d/beskar.conf' <<<"$manifest" || missing+=("zfs-load-key drop-in")
+    grep -q 'zfs-load-module.service.d/beskar.conf' <<<"$manifest" || missing+=("zfs-load-module drop-in")
+
+    if ((${#missing[@]} == 0)); then
+        success "Initramfs ${image} contains the Beskar loader and systemd drop-ins."
+    else
+        warn "Initramfs ${image} is missing: ${missing[*]}. Run '$BINARY --config $CONFIG_PATH install-dracut --dataset ${dataset}' after resolving."
+    fi
+}
+
 info() { printf '%b\n' "${ACCENT}[INFO]${RESET} $1"; }
 success() { printf '%b\n' "${SUCCESS}[OK]${RESET} $1"; }
 warn() { printf '%b\n' "${WARN}[WARN]${RESET} $1"; }
@@ -201,6 +233,7 @@ INSTALL_CMD=(
 if ! "${INSTALL_CMD[@]}"; then
     die "Systemd unit installation failed. Run '$BINARY install-units' manually once resolved."
 fi
+verify_initramfs_artifacts "$DATASET"
 
 printf '\n'
 KEY_PATH=$(grep -E '^key_hex_path' "$CONFIG_PATH" 2>/dev/null | head -n1 | cut -d'"' -f2 || true)

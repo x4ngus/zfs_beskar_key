@@ -12,13 +12,11 @@ A USB-first ZFS unlock companion forged for dependable, unattended boots. Tribut
 
 `zfs_beskar_key` unlocks encrypted ZFS datasets from a dedicated USB key while keeping a secured passphrase fallback online. Configuration lives in `/etc/zfs-beskar.toml`; commands default to strict permissions and atomic writes.
 
-### Release highlights (v1.7.3)
+### Release highlights (v1.7.4)
 
-- The Beskar loader now fails closed with explicit journal errors when the token never appears, the mount flakes, or `zfs load-key -a` returns non-zero—no more silent success followed by dracut warnings.
-- initramfs enforces the recorded `usb.expected_sha256`, refusing to feed ZFS when the on-disk key doesn’t match and telling you exactly why it bailed out.
-- The dracut module now carries `udevadm`, `sha256sum`, and the ext4/vfat kernel modules so mounting `/run/beskar` in early boot is reliable even on trimmed images, and doctor warns when the checksum guard is missing.
-- `zfs-load-module.service` now `Requires=` the Beskar loader, so the USB wait/verify logic always runs before ZFS touches disks; if the token workflow fails, you see the error before the import stack proceeds.
-- `dracut -f` invocations now force-add `zfs-beskar`, guaranteeing the module (and its services) actually land inside the refreshed initramfs image.
+- The Beskar loader is always baked into initramfs via `dracut -f --add zfs-beskar`, and both `zfs-load-module`/`zfs-load-key` now `Require=` it, so USB mounting + key verification happen before any ZFS import work begins.
+- `beskar-load-key.sh` decodes the stored hex into raw bytes before hashing, eliminating false checksum mismatches when the key file includes trailing newlines or whitespace.
+- The bootstrapper verifies the refreshed initramfs actually contains `beskar-load-key` and its systemd drop-ins (via `lsinitrd`) and warns you immediately if anything is missing.
 
 ---
 
