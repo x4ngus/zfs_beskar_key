@@ -17,8 +17,12 @@ fn main() {
             "src/dracut/templates/beskar-load-key.service",
         ),
         (
-            "DROPIN_TEMPLATE",
+            "DROPIN_KEY_TEMPLATE",
             "src/dracut/templates/beskar-load-key.conf",
+        ),
+        (
+            "DROPIN_MODULE_TEMPLATE",
+            "src/dracut/templates/zfs-load-module.conf",
         ),
     ];
 

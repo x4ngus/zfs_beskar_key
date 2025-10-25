@@ -1,7 +1,7 @@
 [Unit]
 Description=Beskar key loader (v{{VERSION}})
 DefaultDependencies=no
-Before=zfs-load-key.service initrd-root-fs.target
+Before=zfs-load-module.service zfs-load-key.service initrd-root-fs.target
 After=systemd-udev-settle.service
 Wants=zfs-load-key.service systemd-udev-settle.service
 
