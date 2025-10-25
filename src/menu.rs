@@ -84,7 +84,8 @@ pub fn show_main_menu(ui: &UX, timing: &Timing) -> Option<MenuChoice> {
     let row_style = Style::new().color256(221).bold();
     for (idx, (_choice, text, _ack)) in entries.iter().enumerate() {
         let label = format!("{:>2}. {}", idx + 1, text);
-        let centered = format!("{:^width$}", label, width = inner_width);
+        let body_width = inner_width.saturating_sub(2);
+        let centered = format!("{:^width$}", label, width = body_width);
         let left_edge = frame_style.apply_to("║").to_string();
         let right_edge = frame_style.apply_to("║").to_string();
         let left_motif = Style::new()
@@ -99,7 +100,7 @@ pub fn show_main_menu(ui: &UX, timing: &Timing) -> Option<MenuChoice> {
             .to_string();
         let body = row_style.apply_to(centered).to_string();
         println!(
-            "{}{}{}{}{}",
+            "{}{} {} {}{}",
             left_edge, left_motif, body, right_motif, right_edge
         );
     }

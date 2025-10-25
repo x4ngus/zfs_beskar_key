@@ -12,6 +12,8 @@
   - `zfs_beskar_key recover` (and the new menu item) wipes a selected USB, rebuilds the filesystem, and writes the original raw key using only the Base32 recovery code printed during `init`. The workflow runs entirely offline so any Linux machine with the tool installed can rebuild a Beskar token.
 - **Base32 recovery codes**  
   - `init` now encodes the actual 32-byte key with RFC 4648 Base32 (no padding) and displays the grouped string for offline storage. No more random passphrases—what you store is exactly what the loader expects.
+- **Passphrase fallback hardening**  
+  - Operators can now seal the raw key with an optional fallback passphrase during `init`. The passphrase is stored via PBKDF2+XOR (salted) and can be exercised with the new `self-test --fallback` flag, which temporarily hides the USB to ensure the passphrase path succeeds before a crisis.
 - **Raw-key enforcement & holistic polish**  
   - Legacy hex flows were purged from unlock, doctor, simulation, and bootstrap. Any leftover hex files are auto-converted, the initramfs loader refuses keys that aren’t 32 bytes, and the vault drill now spins a raw-key ephemeral pool mirroring boot-time behavior.
 - **Concise bounty-hunter UX**  

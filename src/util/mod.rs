@@ -5,6 +5,7 @@
 pub mod atomic;
 pub mod audit;
 pub mod binary;
+pub mod kdf;
 pub mod keyfile;
 pub mod lockout;
 pub mod recovery;

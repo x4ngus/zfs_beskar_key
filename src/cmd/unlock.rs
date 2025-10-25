@@ -3,9 +3,10 @@
 // ============================================================================
 
 use crate::cmd::Cmd;
-use crate::config::ConfigFile;
+use crate::config::{ConfigFile, Fallback};
 use crate::ui::{Pace, Timing, UX};
 use crate::util::audit::audit_log;
+use crate::util::kdf::pbkdf2_sha256;
 use crate::util::keyfile::{ensure_raw_key_file, KeyEncoding};
 use crate::util::lockout::Lockout;
 use crate::zfs::Zfs;
@@ -153,9 +154,11 @@ pub fn run_unlock(
                         audit_log("UNLOCK_KEY_FETCH_FAIL", &err.to_string());
                         return Err(err);
                     }
+                    let raw_from_pass =
+                        recover_raw_key_from_passphrase(&cfg.fallback, &passphrase)?;
                     fallback_primed = true;
                     audit_log("UNLOCK_FALLBACK_USED", "Fallback passphrase requested");
-                    (passphrase, KeyOrigin::Passphrase)
+                    (raw_from_pass, KeyOrigin::Passphrase)
                 }
             }
         } else if fallback_allowed {
@@ -181,7 +184,8 @@ pub fn run_unlock(
                 return Err(err);
             }
             audit_log("UNLOCK_FALLBACK_USED", "Fallback passphrase requested");
-            (passphrase, KeyOrigin::Passphrase)
+            let raw_from_pass = recover_raw_key_from_passphrase(&cfg.fallback, &passphrase)?;
+            (raw_from_pass, KeyOrigin::Passphrase)
         } else {
             let err = anyhow!(
                 "No key material sources remain for {}. USB-only mode is active and fallback is disabled.",
@@ -317,10 +321,7 @@ fn load_usb_key_material(ui: &UX, cfg: &ConfigFile) -> Result<Zeroizing<Vec<u8>>
         audit_log("UNLOCK_CHECKSUM_SKIP", "Checksum skipped; field not set");
     }
 
-    let mut ascii_hex = hex::encode(&*material.raw).into_bytes();
-    ascii_hex.push(b'\n');
-
-    Ok(Zeroizing::new(ascii_hex))
+    Ok(material.raw)
 }
 
 fn prompt_fallback_passphrase(
@@ -386,4 +387,45 @@ fn prompt_fallback_passphrase(
         .context("interactive fallback passphrase prompt failed")?;
 
     Ok(Zeroizing::new(passphrase.into_bytes()))
+}
+
+fn recover_raw_key_from_passphrase(
+    fallback: &Fallback,
+    passphrase: &[u8],
+) -> Result<Zeroizing<Vec<u8>>> {
+    if !fallback.enabled {
+        return Err(anyhow!(
+            "Fallback passphrase not configured. Re-run init to set one."
+        ));
+    }
+
+    let salt_hex = fallback
+        .passphrase_salt
+        .as_ref()
+        .ok_or_else(|| anyhow!("Fallback passphrase salt missing from config."))?;
+    let xor_hex = fallback
+        .passphrase_xor
+        .as_ref()
+        .ok_or_else(|| anyhow!("Fallback passphrase data missing from config."))?;
+
+    let salt = hex::decode(salt_hex).context("decode fallback salt hex")?;
+    let cipher = hex::decode(xor_hex).context("decode fallback key data")?;
+
+    if cipher.len() != 32 {
+        return Err(anyhow!(
+            "Fallback key data length mismatch ({} bytes).",
+            cipher.len()
+        ));
+    }
+
+    let iters = fallback.passphrase_iters.max(1);
+    let mut derived = Zeroizing::new(vec![0u8; cipher.len()]);
+    pbkdf2_sha256(passphrase, &salt, iters, &mut derived);
+
+    let raw: Vec<u8> = cipher
+        .iter()
+        .zip(derived.iter())
+        .map(|(c, d)| c ^ d)
+        .collect();
+    Ok(Zeroizing::new(raw))
 }

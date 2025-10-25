@@ -86,7 +86,11 @@ enum Commands {
     Recover,
     InstallUnits,
     InstallDracut,
-    SelfTest,
+    SelfTest {
+        /// Simulate missing USB to test fallback passphrase.
+        #[arg(long)]
+        fallback: bool,
+    },
 }
 
 // ----------------------------------------------------------------------------
@@ -244,7 +248,8 @@ fn dispatch_command(
             timing.pace(Pace::Prompt);
         }
 
-        Commands::SelfTest => {
+        Commands::SelfTest { fallback } => {
+            let fallback = *fallback;
             ui.info("Initiating beskar self-test sequence…");
             let dataset = resolve_dataset(&cli.dataset, cfg)?;
             let timeout = Duration::from_secs(cfg.crypto.timeout_secs.max(1));
@@ -259,7 +264,30 @@ fn dispatch_command(
             if !zfs.is_unlocked(&enc_root)? {
                 ui.info("Key withdrawn from memory space.");
             }
-            match cmd::unlock::run_unlock(ui, timing, cfg, &enc_root, UnlockOptions::default()) {
+            let hide_guard = if fallback {
+                if cfg.fallback.passphrase_xor.is_none() {
+                    return Err(anyhow!(
+                        "Fallback passphrase not configured; run init to set one."
+                    ));
+                }
+                ui.note("Simulating missing USB for fallback test.");
+                Some(HiddenKeyFile::new(Path::new(&cfg.usb.key_hex_path))?)
+            } else {
+                None
+            };
+
+            let unlock_opts = if fallback {
+                UnlockOptions { strict_usb: false }
+            } else {
+                UnlockOptions::default()
+            };
+
+            let result = cmd::unlock::run_unlock(ui, timing, cfg, &enc_root, unlock_opts);
+            if let Some(guard) = hide_guard.as_ref() {
+                guard.restore()?;
+            }
+
+            match result {
                 Ok(_) => {
                     ui.success("Self-test passed; the auto-unlock path holds.");
                     timing.pace(Pace::Prompt);
@@ -337,6 +365,40 @@ fn resolve_dataset(dataset_opt: &Option<String>, cfg: &ConfigFile) -> Result<Str
         Err(anyhow!(
             "dataset not specified; use --dataset or config.policy.datasets[0]"
         ))
+    }
+}
+
+struct HiddenKeyFile {
+    original: PathBuf,
+    backup: PathBuf,
+}
+
+impl HiddenKeyFile {
+    fn new(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            return Err(anyhow!("USB key file {} not found", path.display()));
+        }
+        let backup = path.with_extension("fallback-hide");
+        fs::rename(path, &backup)
+            .with_context(|| format!("rename {} -> {}", path.display(), backup.display()))?;
+        Ok(Self {
+            original: path.to_path_buf(),
+            backup,
+        })
+    }
+
+    fn restore(&self) -> Result<()> {
+        if self.backup.exists() {
+            fs::rename(&self.backup, &self.original)
+                .with_context(|| format!("restore hidden key {}", self.original.display()))?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for HiddenKeyFile {
+    fn drop(&mut self) {
+        let _ = self.restore();
     }
 }
 

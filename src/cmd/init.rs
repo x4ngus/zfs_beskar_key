@@ -22,16 +22,18 @@ use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
 use crate::util::binary::determine_binary_path;
+use crate::util::kdf::pbkdf2_sha256;
 use crate::util::keyfile::read_key_material;
 use crate::util::recovery::encode_recovery_code;
 use crate::zfs::Zfs;
-use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
 use std::collections::HashMap;
 
 const BESKAR_LABEL: &str = crate::dracut::BESKAR_TOKEN_LABEL;
 const DEFAULT_CONFIG_PATH: &str = "/etc/zfs-beskar.toml";
 const DEFAULT_ZFS_BIN: &str = "/sbin/zfs";
 const DEFAULT_TIMEOUT: u64 = 10;
+const DEFAULT_PASSPHRASE_ITERS: u32 = 250_000;
 pub(crate) const INITRAMFS_HOOK_PATH: &str = "/etc/initramfs-tools/hooks/zz-beskar";
 pub(crate) const INITRAMFS_LOCAL_TOP_PATH: &str = "/etc/initramfs-tools/scripts/local-top/beskar";
 const PARTED_BINARIES: &[&str] = &["/sbin/parted", "/usr/sbin/parted", "/usr/bin/parted"];
@@ -257,6 +259,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
 
     begin_phase(ui, "Forge Key", opts.confirm_each_phase)?;
     let key_material = generate_key_material()?;
+    let passphrase_plan = configure_passphrase_plan(ui, &key_material.raw[..])?;
     apply_key_to_encryption_root(
         &zfs,
         &enc_root,
@@ -293,7 +296,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     begin_phase(ui, "Config Etch", opts.confirm_each_phase)?;
     let config_path = PathBuf::from(DEFAULT_CONFIG_PATH);
 
-    let (config, force_write) = if config_path.exists() {
+    let (mut config, force_write) = if config_path.exists() {
         ui.note("Existing config detected; syncing values.");
 
         let backup_path = backup_existing_config(&config_path)?;
@@ -343,6 +346,8 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
             false,
         )
     };
+
+    apply_passphrase_plan(&passphrase_plan, &mut config);
 
     atomic_write_toml(&config_path, &config, force_write)?;
     fs::set_permissions(&config_path, Permissions::from_mode(0o600))
@@ -439,6 +444,81 @@ fn begin_phase(ui: &UX, label: &str, confirm: bool) -> Result<()> {
 // ----------------------------------------------------------------------------
 
 /// Generate a random 24-character recovery key (A-Z, a-z, 0-9)
+enum PassphrasePlan {
+    Disabled,
+    Configured {
+        salt_hex: String,
+        xor_hex: String,
+        iters: u32,
+    },
+}
+
+fn configure_passphrase_plan(ui: &UX, raw_key: &[u8]) -> Result<PassphrasePlan> {
+    let passphrase = Password::new()
+        .with_prompt("Set fallback passphrase (leave blank to skip)")
+        .allow_empty_password(true)
+        .interact()
+        .context("fallback passphrase prompt failed")?;
+
+    if passphrase.is_empty() {
+        ui.note("Fallback passphrase skipped.");
+        return Ok(PassphrasePlan::Disabled);
+    }
+
+    let confirm = Password::new()
+        .with_prompt("Confirm fallback passphrase")
+        .allow_empty_password(false)
+        .interact()
+        .context("fallback passphrase confirmation failed")?;
+
+    if passphrase != confirm {
+        return Err(anyhow!("Fallback passphrases did not match."));
+    }
+
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+    let mut derived = Zeroizing::new(vec![0u8; raw_key.len()]);
+    pbkdf2_sha256(
+        passphrase.as_bytes(),
+        &salt,
+        DEFAULT_PASSPHRASE_ITERS,
+        &mut derived,
+    );
+
+    let xor_bytes: Vec<u8> = raw_key
+        .iter()
+        .zip(derived.iter())
+        .map(|(a, b)| a ^ b)
+        .collect();
+
+    ui.success("Fallback passphrase sealed. Guard it offline.");
+    Ok(PassphrasePlan::Configured {
+        salt_hex: hex::encode(salt),
+        xor_hex: hex::encode(&xor_bytes),
+        iters: DEFAULT_PASSPHRASE_ITERS,
+    })
+}
+
+fn apply_passphrase_plan(plan: &PassphrasePlan, cfg: &mut ConfigFile) {
+    match plan {
+        PassphrasePlan::Disabled => {
+            cfg.fallback.enabled = false;
+            cfg.fallback.passphrase_salt = None;
+            cfg.fallback.passphrase_xor = None;
+        }
+        PassphrasePlan::Configured {
+            salt_hex,
+            xor_hex,
+            iters,
+        } => {
+            cfg.fallback.enabled = true;
+            cfg.fallback.passphrase_salt = Some(salt_hex.clone());
+            cfg.fallback.passphrase_xor = Some(xor_hex.clone());
+            cfg.fallback.passphrase_iters = *iters;
+        }
+    }
+}
+
 pub(crate) fn sanitize_key_name(dataset: &str) -> String {
     dataset
         .chars()
