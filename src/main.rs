@@ -13,7 +13,7 @@ mod zfs;
 use crate::cmd::unlock::UnlockOptions;
 use crate::config::ConfigFile;
 use crate::util::binary::determine_binary_path;
-use crate::util::keyfile::{ensure_raw_key_file, KeyEncoding};
+use crate::util::keyfile::ensure_raw_key_file;
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use rand::rngs::OsRng;
@@ -407,15 +407,9 @@ fn auto_unlock_with(
     }
 
     let usb_path = Path::new(&cfg.usb.key_hex_path);
-    let disk_material = ensure_raw_key_file(usb_path)
-        .with_context(|| format!("normalize USB key file {}", usb_path.display()))?;
-    if disk_material.encoding == KeyEncoding::Hex {
-        ui.warn(&format!(
-            "Legacy hex key at {} converted to raw bytes.",
-            usb_path.display()
-        ));
-    }
-    let raw_key_bytes = disk_material.raw;
+    let raw_key_bytes = ensure_raw_key_file(usb_path)
+        .with_context(|| format!("normalize USB key file {}", usb_path.display()))?
+        .raw;
 
     let mut hasher = Sha256::new();
     hasher.update(&raw_key_bytes);
