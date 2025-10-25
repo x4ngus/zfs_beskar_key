@@ -148,14 +148,14 @@ require_cmd() {
 }
 
 forge_banner
-info "Beskar bootstrap starting. Tribute ready."
+info "Armorer console online. Tribute inbound."
 
 if [[ -n $CONFIG_OVERRIDE && $CONFIG_OVERRIDE != "$CONFIG_PATH" ]]; then
-    warn "CONFIG_PATH override (${CONFIG_OVERRIDE}) ignored; forge writes ${CONFIG_PATH}."
+    warn "CONFIG_PATH override (${CONFIG_OVERRIDE}) ignored; creed lives at ${CONFIG_PATH}."
 fi
 
 [[ $EUID -eq 0 ]] || die "Run this script as root."
-[[ -x $BINARY ]] || die "$BINARY not found. Install zfs_beskar_key first."
+[[ -x $BINARY ]] || die "$BINARY missing. Install zfs_beskar_key before invoking the forge."
 
 mkdir -p "$RUN_DIR"
 
@@ -164,16 +164,16 @@ for cmd in lsblk blkid parted mkfs.ext4 udevadm sha256sum zfs; do
 done
 
 printf '\n'
-info "Scanning removable vessels…"
+info "Sweeping hangar for candidate vessels."
 lsblk -rpo NAME,TYPE,RM,SIZE,MODEL |
     awk '$2 == "disk" { rm = ($3 == "1") ? "yes" : "no"; printf "  %s  %s  removable=%s  %s\n", $1, $4, rm, $5 }'
 
 printf '%b' "${ACCENT}▸${RESET} Select target device (e.g. /dev/sdb): "
 read -r DEVICE
-[[ -n ${DEVICE:-} && -b $DEVICE ]] || die "Invalid block device: $DEVICE"
+[[ -n ${DEVICE:-} && -b $DEVICE ]] || die "Not a valid vessel: $DEVICE"
 
 printf '\n'
-printf '%b' "${WARN}▲${RESET} This erases all data on $DEVICE. Continue? [y/N]: "
+printf '%b' "${WARN}▲${RESET} This purge is irreversible. Continue? [y/N]: "
 read -r confirm
 [[ ${confirm,,} == "y" ]] || die "Aborted by user."
 
@@ -185,7 +185,7 @@ DEFAULT_DATASET=$(zfs list -H -o name,mountpoint -t filesystem 2>/dev/null | awk
 if [[ -z $DEFAULT_DATASET ]]; then
     DEFAULT_DATASET="rpool/ROOT"
 else
-    info "Detected dataset $DEFAULT_DATASET at /. Target set."
+    info "Detected $DEFAULT_DATASET guarding root. Target locked."
 fi
 
 printf '%b' "${ACCENT}▸${RESET} Dataset to unlock [$DEFAULT_DATASET]: "
@@ -201,7 +201,7 @@ if [[ ${safe_answer,,} == "y" ]]; then
 fi
 
 printf '\n'
-info "Invoking zfs_beskar_key v${APP_VERSION} for the forge."
+info "Summoning zfs_beskar_key v${APP_VERSION} to temper."
 INIT_CMD=(
     "$BINARY"
     "--config" "$CONFIG_PATH"
@@ -212,7 +212,7 @@ INIT_CMD=(
 )
 
 if ! "${INIT_CMD[@]}"; then
-    die "Forge command failed; resolve errors above."
+    die "Forge command failed; inspect the output above."
 fi
 
 ENCRYPTION_ROOT=$(zfs get -H -o value encryptionroot "$DATASET" 2>/dev/null | awk 'NR==1 {print $1}' || true)
@@ -221,12 +221,12 @@ if [[ -z ${ENCRYPTION_ROOT:-} || ${ENCRYPTION_ROOT} == "-" ]]; then
 fi
 KEY_LOCATION=$(zfs get -H -o value keylocation "$ENCRYPTION_ROOT" 2>/dev/null | awk 'NR==1 {print $1}' || true)
 if [[ -n ${KEY_LOCATION:-} ]]; then
-    info "Encryption root $ENCRYPTION_ROOT now reports keylocation=$KEY_LOCATION."
+    info "Encryption root $ENCRYPTION_ROOT now advertises $KEY_LOCATION."
 fi
-success "Init run complete; dracut refreshed."
+success "Init pass complete; dracut carries the Beskar loader."
 
 printf '\n'
-info "Installing systemd sentries…"
+info "Posting systemd sentries at their watch."
 INSTALL_CMD=(
     "$BINARY"
     "--config" "$CONFIG_PATH"

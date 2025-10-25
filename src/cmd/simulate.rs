@@ -20,7 +20,7 @@ use tempfile::TempDir;
 
 pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Result<()> {
     ui.banner();
-    ui.phase("Sim Forge Prep");
+    ui.phase("Holoforge // Prep");
 
     let mut sim = match VaultSimulation::prepare(base_cfg) {
         Ok(sim) => sim,
@@ -32,15 +32,15 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
     timing.pace(Pace::Info);
 
     ui.info(&format!(
-        "Ephemeral pool {} hammered atop {}.",
+        "Holoforge basin {} hammered atop {}.",
         sim.pool_name,
         sim.image_path.display()
     ));
-    ui.note("Sealing training vault to mimic cold boot.");
+    ui.note("Vault sealed to mimic cold boot.");
     sim.ensure_locked()?;
     timing.pace(Pace::Prompt);
 
-    ui.phase("USB Drill");
+    ui.phase("Holoforge // USB Drill");
     match crate::cmd::unlock::run_unlock(
         ui,
         timing,
@@ -51,9 +51,9 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
         Ok(_) => {
             let zfs = sim.zfs()?;
             if zfs.is_unlocked(&sim.dataset_name)? {
-                ui.success("Ephemeral vault unlocked — beskar token validated.");
+                ui.success("Drill complete — token proven.");
             } else {
-                ui.warn("Vault status uncertain after drill; inspect `zfs keystatus`.");
+                ui.warn("Vault status hazy; inspect `zfs keystatus`.");
             }
         }
         Err(err) => {
@@ -63,20 +63,20 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
     }
     timing.pace(Pace::Info);
 
-    ui.phase("Reseal Key");
+    ui.phase("Holoforge // Reseal Key");
     let zfs = sim.zfs()?;
     if let Err(err) = zfs.unload_key(&sim.dataset_name) {
         emit_reseal_remediation(ui, timing, base_cfg, &err);
         return Err(err);
     }
-    ui.success("Ephemeral vault sealed; key withdrawn from memory.");
+    ui.success("Holoforge vault resealed; echoes cleared.");
     timing.pace(Pace::Critical);
 
-    ui.phase("Forge Cleanup");
+    ui.phase("Holoforge // Cleanup");
     sim.teardown()?;
     timing.pace(Pace::Info);
 
-    ui.phase("Post Drill Brief");
+    ui.phase("Holoforge // Debrief");
     ui.data_panel(
         "Recommended Steps",
         &[
@@ -94,9 +94,7 @@ pub fn run_vault_drill(ui: &UX, timing: &Timing, base_cfg: &ConfigFile) -> Resul
             ),
         ],
     );
-    ui.note(
-        "If any step raises concerns, rerun the forge with --force and inspect `/etc/zfs-beskar.toml.bak-*` for recovery.",
-    );
+    ui.note("If any step falters, rerun with --force and inspect `/etc/zfs-beskar.toml.bak-*`.");
     ui.success("Simulation complete. This is the Way.");
     Ok(())
 }

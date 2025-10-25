@@ -93,7 +93,7 @@ pub struct InitOptions {
 pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     ui.banner();
     begin_phase(ui, "Armorer Temper", opts.confirm_each_phase)?;
-    ui.info("Token docked. State objective.");
+    ui.info("Token docked. Name the hunt.");
     timing.pace(Pace::Info);
 
     let binary_path = determine_binary_path(None)?;
@@ -104,7 +104,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         Ok(ds) => ds,
         Err(err) => {
             ui.warn(&format!(
-                "Root scan failed ({}). Defaulting to rpool/ROOT.",
+                "Lineage obscured ({}). Defaulting to rpool/ROOT.",
                 err
             ));
             None
@@ -114,7 +114,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     let target_dataset = if let Some(dataset) = opts.pool.clone() {
         dataset
     } else if let Some(auto) = detected_root.clone() {
-        ui.info(&format!("Detected {} at /. Target locked.", auto));
+        ui.info(&format!("Detected {} guarding root. Target locked.", auto));
         auto
     } else {
         "rpool/ROOT".to_string()
@@ -125,7 +125,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         Ok(_) => target_dataset.clone(),
         Err(err) => {
             ui.warn(&format!(
-                "Encryption root unknown for {} ({}). Using dataset.",
+                "Lineage unknown for {} ({}). Using dataset.",
                 target_dataset, err
             ));
             target_dataset.clone()
@@ -208,7 +208,10 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     let mut effective_force = opts.force;
 
     if effective_force {
-        ui.warn(&format!("Override accepted. Wiping {} clean.", usb_disk));
+        ui.warn(&format!(
+            "Override accepted. Purging {} to bare alloy.",
+            usb_disk
+        ));
         wipe_usb_token(&usb_disk, &usb_partition, ui)?;
         settle_udev(ui)?;
         audit_log(
@@ -224,7 +227,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
                         return Err(err);
                     }
 
-                    ui.note("Safe mode: crest mismatch. Choose strike.");
+                    ui.note("Safe mode: crest mismatch. Command next strike.");
                     let theme = ColorfulTheme::default();
                     let actions = vec!["Cleanse ingot", "Rescan sigils", "Stand down"];
                     let choice = Select::with_theme(&theme)
@@ -297,13 +300,10 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     let config_path = PathBuf::from(DEFAULT_CONFIG_PATH);
 
     let (mut config, force_write) = if config_path.exists() {
-        ui.note("Existing config detected; syncing values.");
+        ui.note("Old creed found; aligning lines.");
 
         let backup_path = backup_existing_config(&config_path)?;
-        ui.note(&format!(
-            "Previous inscription preserved at {}.",
-            backup_path.display()
-        ));
+        ui.note(&format!("Backup etched at {}.", backup_path.display()));
 
         let cfg = match ConfigFile::load(&config_path) {
             Ok(mut existing) => {
@@ -352,7 +352,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     atomic_write_toml(&config_path, &config, force_write)?;
     fs::set_permissions(&config_path, Permissions::from_mode(0o600))
         .context("failed to set config permissions")?;
-    ui.success(&format!("Config written to {}.", config_path.display()));
+    ui.success(&format!("Creed etched at {}.", config_path.display()));
     audit_log("INIT_CFG", &format!("Created {}", config_path.display()));
     timing.pace(Pace::Info);
 
@@ -376,14 +376,17 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
     begin_phase(ui, "Contingency", opts.confirm_each_phase)?;
     let recovery_code = encode_recovery_code(&key_material.raw);
     let recovery_formatted = group_string(&recovery_code, 4, '-');
-    ui.security(&format!("Recovery key: {}. Guard it.", recovery_formatted));
+    ui.security(&format!(
+        "Recovery sigil: {}. Guard it.",
+        recovery_formatted
+    ));
     audit_log("INIT_RECOVERY", "Generated recovery key");
     timing.pace(Pace::Info);
 
     begin_phase(ui, "Initramfs Briefing", opts.confirm_each_phase)?;
-    ui.info("Rebuilding initramfs now.");
+    ui.info("Summoning smiths to rebuild initramfs.");
     match rebuild_initramfs(ui, &initramfs_flavor) {
-        Ok(_) => ui.success("Initramfs rebuilt with Beskar module."),
+        Ok(_) => ui.success("Initramfs now bears the Beskar loader."),
         Err(e) => {
             ui.warn(&format!("Automatic initramfs rebuild failed ({}).", e));
             ui.note(
@@ -455,18 +458,18 @@ enum PassphrasePlan {
 
 fn configure_passphrase_plan(ui: &UX, raw_key: &[u8]) -> Result<PassphrasePlan> {
     let passphrase = Password::new()
-        .with_prompt("Set fallback passphrase (leave blank to skip)")
+        .with_prompt("Armorer passphrase (blank to skip)")
         .allow_empty_password(true)
         .interact()
         .context("fallback passphrase prompt failed")?;
 
     if passphrase.is_empty() {
-        ui.note("Fallback passphrase skipped.");
+        ui.note("Passphrase skipped; USB stands alone.");
         return Ok(PassphrasePlan::Disabled);
     }
 
     let confirm = Password::new()
-        .with_prompt("Confirm fallback passphrase")
+        .with_prompt("Confirm Armorer passphrase")
         .allow_empty_password(false)
         .interact()
         .context("fallback passphrase confirmation failed")?;
@@ -491,7 +494,7 @@ fn configure_passphrase_plan(ui: &UX, raw_key: &[u8]) -> Result<PassphrasePlan> 
         .map(|(a, b)| a ^ b)
         .collect();
 
-    ui.success("Fallback passphrase sealed. Guard it offline.");
+    ui.success("Passphrase sealed. Guard it offline.");
     Ok(PassphrasePlan::Configured {
         salt_hex: hex::encode(salt),
         xor_hex: hex::encode(&xor_bytes),
@@ -865,10 +868,7 @@ pub(crate) fn write_key_to_usb(
         if force {
             fs::remove_file(&key_path).context("remove existing key file")?;
         } else {
-            ui.warn(&format!(
-                "Existing key {} found; regenerating.",
-                key_filename
-            ));
+            ui.warn(&format!("Old ingot {} detected; reforging.", key_filename));
             fs::remove_file(&key_path).ok();
         }
     }
@@ -970,7 +970,7 @@ fn apply_key_to_encryption_root(
     key_location: &str,
     ui: &UX,
 ) -> Result<()> {
-    ui.info(&format!("Forging new key for {}.", enc_root));
+    ui.info(&format!("Tempering new key for {}.", enc_root));
 
     change_key_with_bytes(zfs, enc_root, &key_material.raw[..])
         .with_context(|| format!("change-key invocation for {}", enc_root))?;

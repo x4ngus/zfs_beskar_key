@@ -61,7 +61,7 @@ enum UnitVerification {
 
 pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
     ui.banner();
-    ui.phase("Diagnostics Report");
+    ui.phase("Diagnostics // Armour Sweep");
 
     let mut report: Vec<ReportEntry> = Vec::new();
     let mut need_initramfs_refresh = false;
@@ -1003,7 +1003,7 @@ fn summarize(report: &[ReportEntry], ui: &UX, timing: &Timing) -> Result<()> {
     if fails > 0 {
         Err(anyhow!("Diagnostics uncovered blocking issues"))
     } else {
-        ui.success("Diagnostics steady. This is the Way.");
+        ui.success("Armour holds. This is the Way.");
         Ok(())
     }
 }

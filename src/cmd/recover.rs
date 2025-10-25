@@ -13,10 +13,10 @@ use dialoguer::Password;
 
 pub fn run_recover(ui: &UX, timing: &Timing, dataset: &str) -> Result<()> {
     ui.banner();
-    ui.phase("Recovery Forge");
+    ui.phase("Recovery // Tribute Recall");
 
     let recovery_code = Password::new()
-        .with_prompt("Enter recovery key")
+        .with_prompt("Enter Armorer recovery sigil")
         .allow_empty_password(false)
         .interact()
         .context("read recovery key input")?;
@@ -28,14 +28,17 @@ pub fn run_recover(ui: &UX, timing: &Timing, dataset: &str) -> Result<()> {
     dismantle_mounts(&usb_disk, ui)?;
     dismantle_mounts(&usb_partition, ui)?;
 
-    ui.warn(&format!("About to wipe {} and {}", usb_disk, usb_partition));
+    ui.warn(&format!(
+        "Wiping {} and {} before etching.",
+        usb_disk, usb_partition
+    ));
     wipe_usb_token(&usb_disk, &usb_partition, ui)?;
     settle_udev(ui)?;
 
     let key_filename = format!("{}.keyhex", sanitize_key_name(dataset));
     write_key_to_usb(&usb_partition, &key_filename, true, &raw_key[..], ui)?;
 
-    ui.success("Recovery key restored to Beskar token.");
+    ui.success("Tribute reborn on Beskar token.");
     ui.success("This is the Way.");
     timing.pace(Pace::Critical);
     Ok(())

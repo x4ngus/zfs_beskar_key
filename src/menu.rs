@@ -36,33 +36,33 @@ pub fn show_main_menu(ui: &UX, timing: &Timing) -> Option<MenuChoice> {
     let entries = [
         (
             MenuChoice::Init,
-            "TEMPER BESKAR — Forge USB + config",
-            "Armorer: Full-speed forge engagement.",
+            "TEMPER BESKAR — Forge USB + creed",
+            "Armorer: Crucible primed. Tribute on the anvil.",
         ),
         (
             MenuChoice::InitSafe,
-            "TEMPER BESKAR (SAFE) — Confirm each strike",
-            "Armorer: Awaiting nods between strikes.",
+            "TEMPER BESKAR (SAFE) — Confirm each blow",
+            "Armorer: I pause between strikes; signal readiness.",
         ),
         (
             MenuChoice::VaultDrill,
             "VAULT DRILL — Rehearse holoforge unlock",
-            "Armorer: Observe, then report.",
+            "Armorer: Shadow vault awaits your drill.",
         ),
         (
             MenuChoice::Recover,
             "RECOVER TOKEN — Rebuild USB via recovery key",
-            "Armorer: Tribute restored for battle.",
+            "Armorer: Reforge the token from encoded chant.",
         ),
         (
             MenuChoice::Doctor,
             "ARMORER AUDIT — Inspect plating for faults",
-            "Armorer: I call out weak seams.",
+            "Armorer: I walk the hull and mark seams.",
         ),
         (
             MenuChoice::Quit,
             "BANK COALS — Exit the forge console",
-            "Armorer: Embers await your return.",
+            "Armorer: Embers banked. Return with a new hunt.",
         ),
     ];
     let motif = ["╳", "╂", "╋", "╂"];
