@@ -131,6 +131,13 @@ main() {
     if ! wait_for_key; then
         fail "Key file $KEY_PATH not detected within ${MAX_WAIT_SECONDS}s."
     fi
+    if command -v stat >/dev/null 2>&1; then
+        info "Key file located: $(stat -c '%s bytes, mode %a' "$KEY_PATH")."
+    else
+        local bytes
+        bytes=$(wc -c <"$KEY_PATH")
+        info "Key file located: ${bytes} bytes (stat unavailable)."
+    fi
 
     verify_checksum
 

@@ -9,6 +9,8 @@ Wants=zfs-load-key.service systemd-udev-settle.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/sbin/{{SCRIPT_NAME}}
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=initrd-root-fs.target
