@@ -6,6 +6,7 @@ use crate::cmd::init::{detect_initramfs_flavor, rebuild_initramfs, InitramfsFlav
 use crate::config::ConfigFile;
 use crate::dracut::{self, ModuleContext, ModulePaths, DEFAULT_MOUNTPOINT};
 use crate::ui::UX;
+use crate::util::keyfile::{ensure_raw_key_file, KeyEncoding};
 use crate::zfs::Zfs;
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
@@ -75,6 +76,15 @@ pub fn install_for_dataset(
     if !key_path.is_absolute() {
         return Err(anyhow!(
             "usb.key_hex_path ({}) must be an absolute path.",
+            key_path.display()
+        ));
+    }
+    let material = ensure_raw_key_file(key_path).with_context(|| {
+        format!("normalize key file at {}", key_path.display())
+    })?;
+    if material.encoding == KeyEncoding::Hex {
+        ui.info(&format!(
+            "Converted legacy hex key at {} into raw bytes for Ubuntu's initramfs chain.",
             key_path.display()
         ));
     }

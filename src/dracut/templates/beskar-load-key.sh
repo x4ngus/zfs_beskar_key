@@ -95,23 +95,17 @@ verify_checksum() {
     fi
     local expected="${KEY_SHA256,,}"
 
-    local cleaned
-    cleaned="$(tr -d '\n\r\t ' <"$KEY_PATH" | tr -d ' ')"
-    local len="${#cleaned}"
-    if (( len != 64 )); then
-        fail "Key file $KEY_PATH malformed (expected 64 hex chars, found $len)."
-    fi
-    if ! [[ "$cleaned" =~ ^[0-9A-Fa-f]+$ ]]; then
-        fail "Key file $KEY_PATH contains non-hex characters."
+    local size
+    size=$(stat -c '%s' "$KEY_PATH")
+    if (( size != 32 )); then
+        fail "Key file $KEY_PATH must be 32 raw bytes (found $size). Replay doctor/init to convert."
     fi
 
-    local escaped
-    escaped="$(printf '%s' "$cleaned" | sed 's/../\\x&/g')"
     local actual=""
-    if actual="$(printf '%b' "$escaped" | sha256sum | awk '{print $1}')"; then
+    if actual="$(sha256sum "$KEY_PATH" | awk '{print $1}')"; then
         actual="${actual,,}"
     else
-        fail "Unable to compute SHA-256 for decoded key contents."
+        fail "Unable to compute SHA-256 for $KEY_PATH."
     fi
 
     if [[ "$actual" != "$expected" ]]; then

@@ -13,6 +13,7 @@ mod zfs;
 use crate::cmd::unlock::UnlockOptions;
 use crate::config::ConfigFile;
 use crate::util::binary::determine_binary_path;
+use crate::util::keyfile::{ensure_raw_key_file, KeyEncoding};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use rand::rngs::OsRng;
@@ -397,27 +398,16 @@ fn auto_unlock_with(
         ));
     }
 
-    let usb_path = &cfg.usb.key_hex_path;
-    let raw_text = fs::read_to_string(usb_path)
-        .with_context(|| format!("Failed to read USB key file {}", usb_path))?;
-
-    let cleaned: String = raw_text.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    if cleaned.len() != 64 {
-        ui.error(&format!(
-            "USB key malformed: expected 64 hex chars, found {}.",
-            cleaned.len()
-        ));
-        ui.warn(
-            "Forge a new hex inscription with `openssl rand -hex 32 | sudo tee /run/beskar/key.hex`.",
-        );
-        return Err(anyhow!(
-            "USB key integrity check failed — malformed or truncated: {}",
-            usb_path
+    let usb_path = Path::new(&cfg.usb.key_hex_path);
+    let disk_material = ensure_raw_key_file(usb_path)
+        .with_context(|| format!("normalize USB key file {}", usb_path.display()))?;
+    if disk_material.encoding == KeyEncoding::Hex {
+        ui.warn(&format!(
+            "Legacy hex key at {} converted to 32 raw bytes for Ubuntu initramfs compatibility.",
+            usb_path.display()
         ));
     }
-
-    let raw_key_bytes =
-        hex::decode(&cleaned).context(format!("Failed to decode hex data in {}", usb_path))?;
+    let raw_key_bytes = disk_material.raw;
 
     let mut hasher = Sha256::new();
     hasher.update(&raw_key_bytes);

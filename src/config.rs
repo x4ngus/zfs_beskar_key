@@ -58,7 +58,7 @@ impl Default for CryptoCfg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usb {
-    /// Path to USB key file (usually /run/beskar/key.hex)
+    /// Path to USB key file (binary 32-byte key, usually /run/beskar/key.hex)
     #[serde(default = "default_usb_key_path")]
     pub key_hex_path: String,
 

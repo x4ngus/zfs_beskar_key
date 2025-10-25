@@ -14,6 +14,7 @@ use crate::dracut::{self, ModuleContext, ModulePaths, DEFAULT_MOUNTPOINT};
 use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
+use crate::util::keyfile::{ensure_raw_key_file, KeyEncoding};
 use crate::util::binary::determine_binary_path;
 use crate::zfs::Zfs;
 use anyhow::{anyhow, Result};
@@ -450,70 +451,69 @@ pub fn run_doctor(ui: &UX, timing: &Timing) -> Result<()> {
             ),
         );
     } else {
-        match fs::read_to_string(key_path) {
-            Ok(contents) => {
-                let cleaned: String = contents.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-                if cleaned.len() != 64 {
+        match ensure_raw_key_file(key_path) {
+            Ok(material) => {
+                if material.encoding == KeyEncoding::Hex {
+                    need_initramfs_refresh = true;
                     log_entry(
                         &mut report,
                         ui,
                         timing,
                         "USB key file",
-                        Status::Warn,
-                        "Key is not 64 hex characters – forge a new token.".to_string(),
+                        Status::Fixed,
+                        format!(
+                            "Converted legacy hex contents at {} into 32 raw bytes.",
+                            key_path.display()
+                        ),
                     );
                 } else {
-                    match hex::decode(&cleaned) {
-                        Ok(bytes) => {
-                            let actual_sha = hex::encode(Sha256::digest(&bytes));
-                            match cfg.usb.expected_sha256.as_ref() {
-                                Some(expected) if expected.eq_ignore_ascii_case(&actual_sha) => {
-                                    log_entry(
-                                        &mut report,
-                                        ui,
-                                        timing,
-                                        "USB checksum",
-                                        Status::Pass,
-                                        "SHA-256 matches recorded expectation.".to_string(),
-                                    );
-                                }
-                                _ => {
-                                    cfg.usb.expected_sha256 = Some(actual_sha.clone());
-                                    if let Err(err) = persist_config(&cfg) {
-                                        log_entry(
-                                            &mut report,
-                                            ui,
-                                            timing,
-                                            "USB checksum",
-                                            Status::Warn,
-                                            format!(
-                                                "Checksum mismatch ({}). Re-run init --force.",
-                                                err
-                                            ),
-                                        );
-                                    } else {
-                                        need_initramfs_refresh = true;
-                                        log_entry(
-                                            &mut report,
-                                            ui,
-                                            timing,
-                                            "USB checksum",
-                                            Status::Fixed,
-                                            "Updated config.expected_sha256 to match token."
-                                                .to_string(),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        Err(err) => log_entry(
+                    log_entry(
+                        &mut report,
+                        ui,
+                        timing,
+                        "USB key file",
+                        Status::Pass,
+                        format!("{} present (32-byte raw key).", key_path.display()),
+                    );
+                }
+
+                let actual_sha = hex::encode(Sha256::digest(&*material.raw));
+                match cfg.usb.expected_sha256.as_ref() {
+                    Some(expected) if expected.eq_ignore_ascii_case(&actual_sha) => {
+                        log_entry(
                             &mut report,
                             ui,
                             timing,
-                            "USB key file",
-                            Status::Warn,
-                            format!("Key contents are not valid hex: {}", err),
-                        ),
+                            "USB checksum",
+                            Status::Pass,
+                            "SHA-256 matches recorded expectation.".to_string(),
+                        );
+                    }
+                    _ => {
+                        cfg.usb.expected_sha256 = Some(actual_sha.clone());
+                        if let Err(err) = persist_config(&cfg) {
+                            log_entry(
+                                &mut report,
+                                ui,
+                                timing,
+                                "USB checksum",
+                                Status::Warn,
+                                format!(
+                                    "Checksum mismatch ({}). Re-run init --force.",
+                                    err
+                                ),
+                            );
+                        } else {
+                            need_initramfs_refresh = true;
+                            log_entry(
+                                &mut report,
+                                ui,
+                                timing,
+                                "USB checksum",
+                                Status::Fixed,
+                                "Updated config.expected_sha256 to match token.".to_string(),
+                            );
+                        }
                     }
                 }
             }

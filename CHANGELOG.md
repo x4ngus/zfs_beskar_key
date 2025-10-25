@@ -11,7 +11,8 @@
 - **Loader forced into initramfs chain**  
   - Dracut rebuilds now pass `--add zfs-beskar`, and both `zfs-load-module.service` and `zfs-load-key.service` `Require=` the Beskar loader, guaranteeing the USB wait/mount gate runs before ZFS touches disks.
 - **True raw-key checksum enforcement**  
-  - `beskar-load-key.sh` strips whitespace, decodes the 64-character hex payload into raw bytes, and hashes that binary form, matching the fingerprint captured during `init` and preventing newline-induced mismatches at boot.
+  - USB key files are now stored as 32 raw bytes (legacy hex files are auto-converted during `install-dracut`/`doctor` runs), so Ubuntu 25.10’s dracut hook receives the format it expects and no longer throws `Raw key too long (expected 32)` during `dracut-pre-mount`.
+  - `beskar-load-key.sh` validates file size, hashes the binary contents, and aborts early if the token drifts, matching the fingerprint captured during `init`.
 - **Bootstrap verification**  
   - `scripts/bootstrap.sh` now inspects `/boot/initrd.img-$(uname -r)` with `lsinitrd` and reports any missing Beskar artifacts immediately so operators can re-run `install-dracut` before rebooting.
 
@@ -372,7 +373,7 @@ The project now supports full USB-first auto-unlock for ZFS datasets with a self
   1. Delete any malformed `/run/beskar/key.hex` files.
   2. Regenerate your USB key using:
      ```bash
-     openssl rand -hex 32 | sudo tee /run/beskar/key.hex
+     openssl rand -out /run/beskar/key.hex 32
      sudo chmod 600 /run/beskar/key.hex
      ```
   3. Run once:

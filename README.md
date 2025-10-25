@@ -15,7 +15,7 @@ A USB-first ZFS unlock companion forged for dependable, unattended boots. Tribut
 ### Release highlights (v1.7.4)
 
 - The Beskar loader is always baked into initramfs via `dracut -f --add zfs-beskar`, and both `zfs-load-module`/`zfs-load-key` now `Require=` it, so USB mounting + key verification happen before any ZFS import work begins.
-- `beskar-load-key.sh` decodes the stored hex into raw bytes before hashing, eliminating false checksum mismatches when the key file includes trailing newlines or whitespace.
+- USB key files are now stored as 32 raw bytes (legacy hex files are auto-converted during `doctor`/`install-dracut` runs), matching Ubuntu 25.10’s dracut expectations and eliminating the “Raw key too long (expected 32)” boot failure.
 - The bootstrapper verifies the refreshed initramfs actually contains `beskar-load-key` and its systemd drop-ins (via `lsinitrd`) and warns you immediately if anything is missing.
 
 ---
@@ -60,7 +60,7 @@ sudo sudo zfs_beskar_key
    sudo mkfs.ext4 -L BESKARKEY /dev/sdb1
    sudo mkdir -p /mnt/beskar
    sudo mount /dev/disk/by-label/BESKARKEY /mnt/beskar
-   /usr/local/bin/zfs_beskar_key forge-key | sudo tee /mnt/beskar/rpool.keyhex >/dev/null
+   sudo openssl rand -out /mnt/beskar/rpool.keyhex 32
    sudo chmod 0400 /mnt/beskar/rpool.keyhex
    sudo umount /mnt/beskar
    ```

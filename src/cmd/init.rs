@@ -23,6 +23,7 @@ use crate::ui::{Pace, Timing, UX};
 use crate::util::atomic::atomic_write_toml;
 use crate::util::audit::audit_log;
 use crate::util::binary::determine_binary_path;
+use crate::util::keyfile::read_key_material;
 use crate::zfs::Zfs;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::collections::HashMap;
@@ -294,7 +295,7 @@ pub fn run_init(ui: &UX, timing: &Timing, opts: InitOptions) -> Result<()> {
         &usb_partition,
         &key_filename,
         effective_force,
-        &key_material.hex,
+        &key_material.raw[..],
         ui,
     )?;
     timing.pace(Pace::Info);
@@ -821,23 +822,21 @@ fn query_block_info(device: &str, field: &str) -> Result<String> {
 
 struct KeyMaterial {
     raw: Zeroizing<Vec<u8>>,
-    hex: String,
     sha256: String,
 }
 
 fn generate_key_material() -> Result<KeyMaterial> {
     let mut raw = Zeroizing::new(vec![0u8; 32]);
     OsRng.fill_bytes(&mut raw[..]);
-    let hex = hex::encode(&*raw);
     let sha256 = hex::encode(Sha256::digest(&*raw));
-    Ok(KeyMaterial { raw, hex, sha256 })
+    Ok(KeyMaterial { raw, sha256 })
 }
 
 fn write_key_to_usb(
     partition: &str,
     key_filename: &str,
     force: bool,
-    key_hex: &str,
+    key_raw: &[u8],
     ui: &UX,
 ) -> Result<()> {
     let mount_dir = tempdir().context("create temporary mount directory")?;
@@ -858,8 +857,7 @@ fn write_key_to_usb(
 
     let mut file = File::create(&key_path)
         .with_context(|| format!("create key file at {}", key_path.display()))?;
-    file.write_all(key_hex.as_bytes())?;
-    file.write_all(b"\n")?;
+    file.write_all(key_raw)?;
     file.sync_all().ok();
     fs::set_permissions(&key_path, Permissions::from_mode(0o400))
         .context("set key file permissions")?;
@@ -942,22 +940,8 @@ fn read_existing_key(path: &Path) -> Result<Option<ExistingKey>> {
         return Ok(None);
     }
 
-    let raw_text = fs::read_to_string(path)
-        .with_context(|| format!("read existing key file {}", path.display()))?;
-    let cleaned: String = raw_text.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    if cleaned.len() != 64 {
-        return Err(anyhow!(
-            "Existing key file {} malformed (expected 64 hex chars, found {}).",
-            path.display(),
-            cleaned.len()
-        ));
-    }
-
-    let raw_bytes = Zeroizing::new(
-        hex::decode(cleaned)
-            .with_context(|| format!("decode existing key material at {}", path.display()))?,
-    );
-    Ok(Some(ExistingKey { raw: raw_bytes }))
+    let material = read_key_material(path)?;
+    Ok(Some(ExistingKey { raw: material.raw }))
 }
 
 fn apply_key_to_encryption_root(

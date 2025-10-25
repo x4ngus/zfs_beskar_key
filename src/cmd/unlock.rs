@@ -7,11 +7,11 @@ use crate::config::ConfigFile;
 use crate::ui::{Pace, Timing, UX};
 use crate::util::audit::audit_log;
 use crate::util::lockout::Lockout;
+use crate::util::keyfile::{ensure_raw_key_file, KeyEncoding};
 use crate::zfs::Zfs;
 use anyhow::{anyhow, Context, Result};
 use dialoguer::Password;
 use sha2::{Digest, Sha256};
-use std::fs;
 use std::path::Path;
 use std::time::Duration;
 use zeroize::Zeroizing;
@@ -288,22 +288,18 @@ fn load_usb_key_material(ui: &UX, cfg: &ConfigFile) -> Result<Zeroizing<Vec<u8>>
         return Err(anyhow!("Key file not found: {}", key_path.display()));
     }
 
-    let key_data = fs::read_to_string(key_path)
-        .with_context(|| format!("failed to read {}", key_path.display()))?;
-    let cleaned: String = key_data.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-
-    if cleaned.len() != 64 {
-        return Err(anyhow!(
-            "Key file malformed (expected 64 hex chars, found {})",
-            cleaned.len()
+    let material = ensure_raw_key_file(key_path)
+        .with_context(|| format!("normalize key file {}", key_path.display()))?;
+    if material.encoding == KeyEncoding::Hex {
+        ui.info(&format!(
+            "Legacy hex key at {} converted to raw bytes for initramfs parity.",
+            key_path.display()
         ));
     }
 
-    let raw_bytes = Zeroizing::new(hex::decode(&cleaned)?);
-
     if let Some(expected) = &cfg.usb.expected_sha256 {
         let mut hasher = Sha256::new();
-        hasher.update(&*raw_bytes);
+        hasher.update(&*material.raw);
         let actual = hex::encode(hasher.finalize());
         if !actual.eq_ignore_ascii_case(expected) {
             return Err(anyhow!(
@@ -321,7 +317,7 @@ fn load_usb_key_material(ui: &UX, cfg: &ConfigFile) -> Result<Zeroizing<Vec<u8>>
         audit_log("UNLOCK_CHECKSUM_SKIP", "Checksum skipped; field not set");
     }
 
-    let mut ascii_hex = cleaned.into_bytes();
+    let mut ascii_hex = hex::encode(&*material.raw).into_bytes();
     ascii_hex.push(b'\n');
 
     Ok(Zeroizing::new(ascii_hex))
